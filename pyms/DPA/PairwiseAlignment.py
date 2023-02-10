@@ -38,7 +38,7 @@ import numpy  # type: ignore
 
 # this package
 from pyms.Peak import Peak
-import gcms.settings
+import gcms_align.settings
 
 # try:
 #     # 3rd party
@@ -738,7 +738,7 @@ def align_with_tree(T: PairwiseAlignment, min_peaks: int = 1) -> Alignment:
 
 class MultiAlign(object):
     """ """
-    def __init__(self, alignments, D, gap, temp_align_file: pathlib.Path, config: gcms.settings.Setting):
+    def __init__(self, alignments, D, gap, temp_align_file: pathlib.Path, config: gcms_align.settings.Setting):
         numproc = multiprocessing.cpu_count()-3
         self.temp_align_file = temp_align_file
         self.task_queue = multiprocessing.Queue()

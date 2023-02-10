@@ -7,6 +7,7 @@ Functions related to storing and loading a list of Peak objects.
 #    PyMassSpec software for processing of mass-spectrometry data              #
 #    Copyright (C) 2005-2012 Vladimir Likic                                    #
 #    Copyright (C) 2019-2020 Dominic Davis-Foster                              #
+#    Copyright (C) 2023 Ryan Snowdon                                           #
 #                                                                              #
 #    This program is free software; you can redistribute it and/or modify      #
 #    it under the terms of the GNU General Public License version 2 as         #
@@ -24,7 +25,6 @@ Functions related to storing and loading a list of Peak objects.
 ################################################################################
 
 # stdlib
-import pickle
 from pathlib import Path
 from typing import List, Sequence
 

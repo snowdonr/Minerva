@@ -1,7 +1,7 @@
 '''
 Created on Sept 16, 2021
 
-@author: Ryan
+@author: Ryan Snowdon
 '''
 import matplotlib
 matplotlib.interactive(True)  # show non-blocking
@@ -44,7 +44,6 @@ class MainProcessing(object):
             self.config.data_path = data_input_dir
         self._project = project.Project(sql, config, version, self)
 
-    def start_processing(self):
         # self.config.load_align_pickle = False  # But does not save the change to the ini file
         logging.info(f"Loading {str(datetime.datetime.now().time())}")
         self._project.startup()
@@ -60,10 +59,11 @@ class MainUI(wx.Frame):
     def __init__(self, version: str, default_input_dir: pathlib.Path):
         super().__init__(None, wx.ID_TOP, f"Minerva {version}", size=(490, 380))
         # Setup main objects
+        self.version = version
         config = settings.Setting(pathlib.Path.home() / "Minerva.ini")
-        sql = sql_interface.SQL_Interface()
+        self.sql = sql_interface.SQL_Interface()
         self.config = config
-        self._project = project.Project(sql, config, version, self)
+        self._project = None  # project.Project(self.sql, self.config, self.version, self)
 
         self._status_loading = False
         self._status_loaded = False
@@ -227,6 +227,7 @@ class MainUI(wx.Frame):
 
     def start_processing(self, _event):
         self._load_button.Enable(enable=False)
+        self._project = project.Project(self.sql, self.config, self.version, self)
 
         for item in self._ui_section_list:
             self._check_and_update(item)
@@ -274,6 +275,7 @@ class MainUI(wx.Frame):
         self._merged_sample_plot.show_plot(aligned_set)
 
     def start_process_worker(self):
+        ''' Trigger a thread to process the alignment of the selected sample set '''
         startWorker(consumer=self._finished_alignment, workerFn=self._project.process_samples, jobID=f"align_{len(self._project.sample_set)}")
 
     def _finished_alignment(self, delayed_result):
@@ -299,7 +301,8 @@ class MainUI(wx.Frame):
 
     def on_close(self, _event):
         self.Destroy()
-        sys.exit(0)  # TODO: figure out why processing threads are preventing a full close
+        sys.exit(0)  # TODO: figure out why processing threads are otherwise preventing a full close
 
     def __getstate__(self):
+        logging.debug("*Attempting to pickle main UI*")
         return None  # used to locate pickle attempts on this object

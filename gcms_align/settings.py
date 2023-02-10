@@ -5,6 +5,7 @@ Created on Oct 16, 2020
 '''
 import configparser
 import pathlib
+import logging
 
 
 class Setting(object):
@@ -36,10 +37,14 @@ class Setting(object):
     read_pickle = True
     create_pickle = True
     overwrite_pickle = False
+    compress_cache_files = True
     force_load = False  # Even if pickles are present, load and process CDR files
 
     do_ion_calc = True  # Integrate areas for each ion individually
     do_peak_bounds_calc = True  # Store the beginning and end points of each peak area
+
+    baseline_moving_average_width = 30
+    baseline_multiplier = 1.0
 
     analysis_directory = r"C:/GCMS/Minerva/ExperimentData"
     # result_folder = r"E:/GCMS/Minerva"
@@ -62,7 +67,7 @@ class Setting(object):
     rt_sensitivity_s = 2.5  # rt modulation [s]
     gap_penalty = 0.40
 
-    align_multiprocess = True
+    align_multiprocess = False
     align_sparse_mode = True
     align_diagonal_width = 4
     align_full_compare = (0, 5, 10, 15, 20)
@@ -75,6 +80,7 @@ class Setting(object):
     spectrum_merge_required_match_portion = 0.3
 
     limit_loading_memory = False
+    meta_data_excel = False
     merge_aligned_peaks = True
     merge_compare_normalize = True
     consider_rt_range = 15
@@ -84,10 +90,11 @@ class Setting(object):
     # divide_type = 'weights_only'  # mutually exclusive with other divide types
     # divide_type = 'sample_total'
     divide_type = 'standard_area'  # Assuming internal standards are working, this is what you should use
+    detail_plot_peaks = 100
 
     # Name, Fragment masses and estimated retention times (in seconds) for the standards that are used in normalization
     # *Names must be unique*
-    standard_list = [("d8 Naphthalene", 128+8, 970), ]
+    standard_list = ["Naphthalene-D8", ]
     # ("d10 Phenanthrene", 178+10, 2058),  # mass 97 cluttered
     # ("1,1 Binaphthyl", 254, 2550),  #
     # ("Squalane", 85, None),  # n-alkanes
@@ -114,6 +121,9 @@ class Setting(object):
     lasso_alpha = 0.8  # Higher -> fewer features
     normalize_mean = True
     normalize_std = False
+    profile_load = False
+    blank_name_search = "qc-etoh"
+    standard_name_search = "std-"
 
     def __init__(self, filename: pathlib.Path):
         '''
@@ -123,26 +133,24 @@ class Setting(object):
         # check through attributes of the class, not instance
         for key, value in Setting.__dict__.items():
             # Ignore anything not of type str, float, int, or bool
-            if isinstance(value, str):
+            if isinstance(value, str):  # TODO: match value:   case str():  ...  case _: "Unknown type"
                 read_value = self._store.read(key, None)
-                if read_value is not None:
-                    setattr(self, key, read_value)  # set at the instance level, not the class
             elif isinstance(value, float):
                 read_value = self._store.read_float(key, None)
-                if read_value is not None:
-                    setattr(self, key, read_value)  # set at the instance level, not the class
-            elif isinstance(value, int):
-                read_value = self._store.read_int(key, None)
-                if read_value is not None:
-                    setattr(self, key, read_value)  # set at the instance level, not the class
             elif isinstance(value, bool):
                 read_value = self._store.read_boolean(key, None)
-                if read_value is not None:
-                    setattr(self, key, read_value)  # set at the instance level, not the class
+            elif isinstance(value, int):  # must be after bool, as int is a supertype
+                read_value = self._store.read_int(key, None)
             elif isinstance(value, list):
                 read_value = self._store.read_list(key, None)
-                if read_value is not None:
-                    setattr(self, key, read_value)
+            else:
+                logging.info(f"Unknown setting type {value}, {type(value)}")
+                read_value = None
+
+            if read_value is not None:
+                setattr(self, key, read_value)  # set at the instance level, not the class
+            elif not key.startswith("__"):
+                logging.info(f"No value set for setting key {key}")
 
     def save_value(self, value_name: str, new_value: object):
         self._store.write(value_name, str(new_value))

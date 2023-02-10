@@ -8,12 +8,12 @@ import getpass
 
 import sqlalchemy.orm
 from sqlalchemy import Column, Integer, Float, String, ForeignKey
+
+from .sql_base import Base
+from . import identification
+
 # alembic database migration?
 DEBUG_SQL = False
-
-
-mapper_registry = sqlalchemy.orm.registry()
-Base = mapper_registry.generate_base()  # alternatively: orm.declarative_base
 
 
 class SQL_Interface(object):
@@ -24,7 +24,9 @@ class SQL_Interface(object):
         self.session = None
 
     def link_sqlite(self, file_path: pathlib.Path, clear_file: bool =True):
-        self.engine = sqlalchemy.create_engine(r"sqlite:///"+str(file_path), echo=DEBUG_SQL, future=True)
+        self.engine = sqlalchemy.create_engine(r"sqlite:///"+str(file_path), 
+                                               connect_args={"check_same_thread": False},
+                                               echo=DEBUG_SQL, future=True)
         self.session = sqlalchemy.orm.Session(self.engine)
         if clear_file:
             Base.metadata.drop_all(self.engine)
@@ -33,7 +35,8 @@ class SQL_Interface(object):
     def link_cloud_postgre(self, project_input, clear_database: bool=False):
         ''' Remote db setup '''
         input_cfg = project_input.config
-        self.engine = sqlalchemy.create_engine(f"postgresql://{input_cfg.db_username}:{input_cfg.db_password}@{input_cfg.remote_db_location}:5432/{input_cfg.db_name}")
+        self.engine = sqlalchemy.create_engine(f"postgresql://{input_cfg.db_username}:{input_cfg.db_password}@{input_cfg.remote_db_location}:5432/{input_cfg.db_name}",
+                                               connect_args={"check_same_thread": False})
         self.session = sqlalchemy.orm.Session(self.engine)
         if clear_database:
             Base.metadata.drop_all(self.engine)
@@ -58,7 +61,7 @@ class SQL_Interface(object):
         return result
 
     def search_compounds(self):  # , target_formula: str, target_cas: str) -> typing.Optional['Compound_SQL']:
-        result = self.session.execute(sqlalchemy.select(Compound_SQL))  # .where((Compound_SQL.formula == target_formula) & (Compound_SQL.cas == target_cas)))
+        result = self.session.execute(sqlalchemy.select(identification.UserEntry))  # .where((Compound_SQL.formula == target_formula) & (Compound_SQL.cas == target_cas)))
         return result.fetchall()
 
     def commit(self):
@@ -119,43 +122,43 @@ class CompoundMatch_SQL(Base):
     id = Column(Integer, primary_key=True)
     aligned_id = Column(Integer, ForeignKey("Aligned_Peak_Set.id"))
     aligned_set = sqlalchemy.orm.relationship("AlignedPeakSet_SQL", back_populates="compound_match")
-    compound_id = Column(Integer, ForeignKey("Compound.id"))
-    compound = sqlalchemy.orm.relationship("Compound_SQL", back_populates="aligned_match")
+    compound_id = Column(Integer, ForeignKey("User_ID_Compound.id"))
+    compound = sqlalchemy.orm.relationship("UserEntry", back_populates="aligned_match")
 
     score = Column(Float, nullable=True)
     source = Column(String, nullable=True)
     match_type = Column(String, nullable=True)
 
 
-class Compound_SQL(Base):  # TODO: Merge/Inherit with identification.UserEntry
-    __tablename__ = "Compound"
-    id = Column(Integer, primary_key=True)
-    name = Column(String, nullable=False)
-    formula = Column(String, nullable=True)
-    mw = Column(Integer, nullable=True)
-    cas = Column(String, nullable=True)
-    flavors = Column(String, nullable=True)
-
-    aligned_match = sqlalchemy.orm.relationship("CompoundMatch_SQL", back_populates="compound")
-
-    @staticmethod
-    def dict_key(compound_instance):
-        if compound_instance.formula is not None:
-            if compound_instance.cas is not None and not compound_instance.cas.startswith("0"):
-                cmpd_key = compound_instance.formula +':'+ compound_instance.cas
-            else:
-                cmpd_key = compound_instance.formula +':'+ str(compound_instance.name.encode("utf-8"))
-        else:
-            cmpd_key = str(compound_instance.name.encode("utf-8"))
-        return cmpd_key
-
-    @property
-    def key(self):
-        return Compound_SQL.dict_key(self)
-
-    def __hash__(self):
-        return hash(self.key)
-
+# class Compound_SQL(Base):  # TODO: Merge/Inherit with identification.UserEntry
+#     __tablename__ = "Compound"
+#     id = Column(Integer, primary_key=True)
+#     name = Column(String, nullable=False)
+#     formula = Column(String, nullable=True)
+#     mw = Column(Integer, nullable=True)
+#     cas = Column(String, nullable=True)
+#     flavors = Column(String, nullable=True)
+#
+#     aligned_match = sqlalchemy.orm.relationship("CompoundMatch_SQL", back_populates="compound")
+#
+#     @staticmethod
+#     def dict_key(compound_instance):
+#         if compound_instance.formula is not None:
+#             if compound_instance.cas is not None and not compound_instance.cas.startswith("0"):
+#                 cmpd_key = compound_instance.formula +':'+ compound_instance.cas
+#             else:
+#                 cmpd_key = compound_instance.formula +':'+ str(compound_instance.name.encode("utf-8"))
+#         else:
+#             cmpd_key = str(compound_instance.name.encode("utf-8"))
+#         return cmpd_key
+#
+#     @property
+#     def key(self):
+#         return Compound_SQL.dict_key(self)
+#
+#     def __hash__(self):
+#         return hash(self.key)
+#
 #     def __eq__(self, other):
 #         if isinstance(other, Compound_SQL):
 #             return self.key == other.key

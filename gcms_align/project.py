@@ -9,17 +9,22 @@ import pathlib
 import wx
 import sqlalchemy.orm
 import sqlalchemy.dialects.mysql
+import csv
+import datetime
+import statistics
+import numpy
 
 from . import sample
 from . import analysis
 from . import plot
 from . import identification
+from . import sql_base
 from . import sql_interface
 from . import settings
 from . import main_ui
 
 
-class Project(sql_interface.Base):
+class Project(sql_base.Base):
     '''
     Holding class for interface selections and data structures
     '''
@@ -41,7 +46,7 @@ class Project(sql_interface.Base):
 
     def __init__(self, sql_input: sql_interface.SQL_Interface, config_input: settings.Setting, version: str, main_ref: main_ui.MainUI):
         self.mainUI = main_ref
-        self.sample_set = sample.SampleSet()
+        self.sample_set = sample.SampleSet(config_input=config_input)
         self.sql = sql_input
         self.config = config_input
         self.process_version = version
@@ -54,7 +59,7 @@ class Project(sql_interface.Base):
         if self.config.output_sqlite:
             sql_path = pathlib.Path(self.config.analysis_directory) / (self.config.experiment_name+"_Output.db")
             try:
-                self.sql.link_sqlite(sql_path, clear_file=not sql_path.is_file())
+                self.sql.link_sqlite(sql_path, clear_file=True)  # not sql_path.is_file())
             except sqlalchemy.exc.OperationalError as _e:
                 logging.exception(f"Failed to open db file {sql_path}")
         else:
@@ -77,7 +82,7 @@ class Project(sql_interface.Base):
             for samp in self.sample_set:
                 self.samples.append(samp)
         else:
-            logging.error("ERROR: No files found")  # Program is expected to crash, but is allowed to run for debugging
+            logging.error(f"No files found in {self.config.analysis_directory}")  # Program is expected to crash, but is allowed to run for debugging
         self._update_duplicate_sample_names()
 
     def _update_duplicate_sample_names(self):
@@ -92,14 +97,9 @@ class Project(sql_interface.Base):
                 current_sample.sample_number = next_name
             sample_taken_names.add(current_sample.sample_number)
 
-        # test_sample_set[0].get_mass_sums(50, 550)
-
-    def merged_sample_plot(self):
-        pass
-
     def identify_compounds(self):
         test_sample_data = self.sample_set[0]
-        peaks = test_sample_data.get_filtered_peaks(lambda x: x.area>30000)
+        peaks = test_sample_data.get_filtered_peaks(lambda x: x.area>30000)  # TODO    
 
         identification_results = []
         for current_peak in peaks:
@@ -127,23 +127,23 @@ class Project(sql_interface.Base):
         self.user_library = identification.UserExcel(self.config.user_library_location)
         sample_names = [x.sample_number for x in self.sample_set.data]
         if len(set(sample_names)) != len(sample_names):
-            print("Duplicated sample name")
+            logging.warning(f"Duplicated sample name in {sample_names}")
         try:
             # test_sample_set.remove_zero_peak_samples()  Not here: Tends to be an issue AFTER mass cropping
             self._analysis_set = analysis.Analysis_Set(self.sample_set, self.config.experiment_name, self.config, self.sql)  # [13490, 15196, 15205]
         except Exception as _e:
-            logging.exception("Analysis")
+            logging.exception("Analysis of sample set failed")
             return False
         if self.config.merge_aligned_peaks:
             self._analysis_set.merge_aligned_peaks()
             try:
                 self._analysis_set.write_aligned_csv(self._analysis_set.alignment_data_groups, pathlib.Path(self.config.analysis_directory) / (self.config.experiment_name+"_grouping.csv"))
             except PermissionError:
-                print("Analysis Relationship could not write to 'grouping' Excel file")
+                logging.warning("Analysis Relationship could not write to 'grouping' Excel file")
             try:
                 self._analysis_set.write_aligned_csv(self._analysis_set.merged_data, pathlib.Path(self.config.analysis_directory) / (self.config.experiment_name+"_grouped.csv"))
             except PermissionError:
-                print("Analysis Relationship could not write to 'grouped' Excel file")
+                logging.warning("Analysis Relationship could not write to 'grouped' Excel file")
 
         self.mainUI.full_progress_gauge.SetValue(main_ui.DONE_ALIGN)
         self._analysis_set.add_library_matches(self.user_library, self.sql)
@@ -162,7 +162,49 @@ class Project(sql_interface.Base):
             self.sql.update_project_table(self, self._analysis_set)
         except sqlalchemy.exc.OperationalError as _e:
             logging.exception(f"Could not store data")
+
+        try:
+            self._create_summary(pathlib.Path(self.config.analysis_directory) / (self.config.experiment_name+"_summary.csv"))
+        except Exception as _e:
+            logging.exception(f"Could not create summary file")
         return True
+
+    def _create_summary(self, output_path: pathlib.Path):
+        summary_peak_count = 50
+        max_compound_output = 10
+
+        with open(output_path, 'w', newline='') as csv_file:
+            writer = csv.writer(csv_file, dialect="excel")
+            project_header = ["Project Name", self.config.experiment_name, "Method Name", self.config.method_analysis_name,
+                              "Run Date", datetime.date.today(), "Total Aligned Peaks", len(self._analysis_set.alignment_data_groups)]
+            writer.writerow(project_header)
+            writer.writerow([])
+            
+            field_names = ["Sample Name", "Peak Count", f"Top {summary_peak_count}", "Average Areas", ]  # see AlignedPeakSet.get_output_dict
+            writer.writerow(field_names)
+            for sample_data in self.sample_set.data:
+                sorted_peaks = sample_data.peak_list[:]
+                sorted_peaks.sort(key=lambda x: x.area, reverse=True)
+                summary_peaks = sorted_peaks[:summary_peak_count]
+                summary_areas = [x.area for x in summary_peaks]
+                sample_row = [f"{sample_data.sample_number}", len(sample_data.peak_list), "", statistics.mean(summary_areas)]
+                writer.writerow(sample_row)
+            writer.writerow([])
+
+            aligned_data = self.aligned_peaks
+            aligned_data_areas = [aligned_set.total_area for aligned_set in aligned_data]
+            index_mapping = numpy.argsort(aligned_data_areas)[::-1][:max_compound_output]
+            ordered_aligned_sets = numpy.array(aligned_data)[index_mapping]
+            compound_header = ["Compound", "Samples", "Total Area", "Area SD", "RT Range(s)"]
+            writer.writerow(compound_header)
+            for aligned_set in ordered_aligned_sets:
+                compound_list = ",".join([x.compound.name for x in aligned_set.compound_match])
+                area_list = [x.area for x in aligned_set.gc_peaks]
+                rt_list = [x.rt for x in aligned_set.gc_peaks]
+                try:
+                    writer.writerow([str(compound_list.encode(encoding='UTF-8',errors='ignore')), len(aligned_set.gc_peaks), aligned_set.total_area, numpy.std(area_list), max(rt_list)-min(rt_list)])
+                except UnicodeEncodeError as _e:
+                    logging.exception("Could not encode line")
 
     def get_aligned_set(self) -> list:
         # result = self._analysis_set._alignment_data.peaks_aligned  # TODO: use alignment_data_groups

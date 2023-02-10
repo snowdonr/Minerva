@@ -16,6 +16,7 @@ import pyms.DPA.Alignment
 import pyms.DPA.PairwiseAlignment
 import pyms.Peak.List.IO
 import pyms.Experiment
+import gzip
 # import pandas  # Align object creates pandas DataFrame results
 
 from . import sample
@@ -25,6 +26,9 @@ from . import sql_interface
 
 
 class Align(object):
+    '''
+    Used to align a set of samples
+    '''
 
     def __init__(self, analysis_name: str, sample_number_list: list, sample_set: sample.SampleSet, cache_directory: pathlib.Path, output_directory: pathlib.Path, config: settings.Setting):
         load_from_files = False  # unimplemented
@@ -117,15 +121,6 @@ class Align(object):
             print(f"No samples for analysis from: {sample_number_list}")
             return
 
-#         try:
-#             mass_sums = []
-#             for current_sample in sample_set:
-#                 mass_sums.append(current_sample.get_mass_sums(self.mass_range[0], self.mass_range[1]))
-#             self.mass_grid = numpy.vstack(mass_sums)
-#         except Exception as _e:
-#             logging.exception("Could not calculate mass sums")
-#             self.mass_grid = None
-
         print(f"Beginning alignment of {len(expr_list)} experiments")
         print(f"{datetime.datetime.now()}")
         temp_path = cache_directory / (str(analysis_name)+'_temp_align.pickle')
@@ -137,8 +132,6 @@ class Align(object):
             align_sample_experiments = pyms.DPA.Alignment.exprl2alignment(expr_list)
             pairwise_temp = pathlib.Path(self.config.temp_path) / pathlib.Path((str(analysis_name)+self.config.pairwise_temp_file))
             align_tree = pyms.DPA.PairwiseAlignment.PairwiseAlignment(align_sample_experiments, float(self.config.rt_sensitivity_s), float(self.config.gap_penalty), pairwise_temp, self.config)
-            # with open(cache_directory / (str(analysis_name)+'_tree_align.pickle'), 'wb') as tree_out:
-            #    pickle.dump(align_tree, tree_out)
             pair_aligned = pyms.DPA.PairwiseAlignment.align_with_tree(align_tree, min_peaks=self.config.alignment_minimum_peaks)
             try:
                 with open(temp_path, 'wb') as file_out:
@@ -164,20 +157,23 @@ class Align(object):
         # ms_aligned = pair_aligned.get_ms_alignment(Setting.require_all_peaks)
         self.peaks_aligned = pair_aligned.get_peaks_alignment(self.config.require_all_peaks)
 
-        print(f"Done alignment storage of {len(expr_list)} experiments")
-        print(f"{datetime.datetime.now()}")
-
+        print(f"Starting main alignment storage of {len(expr_list)} experiments")
         try:
-            self.save(cache_directory / (str(analysis_name)+'_align.pickle'))
+            if self.config.compress_cache_files:
+                cache_file_name = cache_directory / (str(analysis_name)+'_align.pickle.cmp')
+                with gzip.open(cache_file_name, 'wb') as file_out:
+                    pickle.dump(self, file_out)
+            else:
+                cache_file_name = cache_directory / (str(analysis_name)+'_align.pickle')
+                with open(cache_file_name, 'wb') as file_out:
+                    # self.peaks_aligned can also have sample references
+                    pickle.dump(self, file_out)
         except Exception as _e:
             logging.exception("Failed to save checkpoint during alignment")
-        self.pickle_load_finish(sample_set)
 
-    def save(self, target_path: pathlib.Path):
-        with open(target_path, 'wb') as file_out:
-            # assert self.sample_set is None
-            # self.peaks_aligned can also have sample references
-            pickle.dump(self, file_out)
+        print(f"Done alignment storage of {len(expr_list)} experiments")
+        print(f"{datetime.datetime.now()}")
+        self.pickle_load_finish(sample_set)
 
     def pickle_load_finish(self, sample_set: sample.SampleSet):
         self.sample_set = sample_set
@@ -211,11 +207,16 @@ class AlignedPeakSet(collections.UserList):
     def __init__(self, initList: list, config: settings.Setting, sample_set: sample.SampleSet):
         super().__init__(initList)
         self._cache = {}
+        self.compound_matches = []
         self.config = config
         self.samples = sample_set
         self.relations = []
         self.considered = False
         self.sql_ref: sql_interface.AlignedPeakSet_SQL = None  # SQL object with this data
+
+    def add_match(self, new_matcher):
+        self.compound_matches.append(new_matcher)
+        self.sql_ref.compound_match.append(new_matcher)
 
     @property
     def count(self) -> int:
@@ -355,7 +356,6 @@ class AlignedPeakSet(collections.UserList):
                 result_dict["Portion"+str(i)] = mass_spec_intensities[target_index]/total_area
 
             mass_spec = self.merged_ms()[0]
-            # mass_spec2 = self.highest_peak().mass_spectrum
             intensity_pos = numpy.argsort(mass_spec.intensity_list)[::-1]
             for i in range(1, min(len(intensity_pos), 4)):
                 target_index = intensity_pos[i-1]
@@ -381,6 +381,5 @@ class AlignedPeakSet(collections.UserList):
                 result_dict[f"C{index} formula"] = entry.compound.formula
                 result_dict[f"C{index} mw"] = entry.compound.mw
                 result_dict[f"C{index} score"] = entry.score
-                # source, match_type
 
         return result_dict

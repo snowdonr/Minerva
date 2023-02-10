@@ -10,28 +10,30 @@ import numpy
 import logging
 import sqlalchemy.orm
 
-from . import sql_interface
-from pandas._libs import index
+from . import sql_base
 
 DEBUG_STATS = False
 
 
-class MassSpectrumEntry(sql_interface.Base):
-    __tablename__ = "ion_peak"
+class MassSpectrumEntry(sql_base.Base):
+    __tablename__ = "Ion_Peak"
 
     id = sqlalchemy.Column(sqlalchemy.Integer, primary_key=True)
-    mass = sqlalchemy.Column(sqlalchemy.Integer, nullable=False)
-    intensity = sqlalchemy.Column(sqlalchemy.Float, nullable=False)
-    area = sqlalchemy.Column(sqlalchemy.Float, nullable=False)
-    spectrum_id = sqlalchemy.Column(sqlalchemy.Integer, sqlalchemy.ForeignKey('mass_spectrum.id'))
+    mass = sqlalchemy.Column(sqlalchemy.Integer, nullable=True)  # TODO: Shouldn't be null
+    intensity = sqlalchemy.Column(sqlalchemy.Float, nullable=True)
+    area = sqlalchemy.Column(sqlalchemy.Float, nullable=True)
+    spectrum_id = sqlalchemy.Column(sqlalchemy.Integer, sqlalchemy.ForeignKey('Mass_Spectrum.id'))
     spectrum = sqlalchemy.orm.relationship("MassSpectrum_SQL", back_populates="values")
 
 
-class MassSpectrum_SQL(sql_interface.Base):
-    __tablename__ = "mass_spectrum"
+class MassSpectrum_SQL(sql_base.Base):
+    __tablename__ = "Mass_Spectrum"
 
     id = sqlalchemy.Column(sqlalchemy.Integer, primary_key=True)
     values = sqlalchemy.orm.relationship("MassSpectrumEntry", back_populates="spectrum")
+
+    gc_peak = sqlalchemy.orm.relationship("Peak", back_populates="mass_spectrum")
+    user_peak = sqlalchemy.orm.relationship("UserEntry", back_populates="spectrum")
 
 
 class MassSpectrum(pyms.Spectrum.MassSpectrum):
@@ -40,11 +42,19 @@ class MassSpectrum(pyms.Spectrum.MassSpectrum):
         '''
         Convert a pyms.MassSpectrum to a database
         '''
+        self.sql_ref = MassSpectrum_SQL()
         if mass_spec is None:
             super().__init__([], [])
         else:
             super().__init__(mass_spec.mass_list, mass_spec.intensity_list)
-        self.sql_ref = MassSpectrum_SQL()
+            # self._update_sql()
+
+    def _update_sql(self):
+        # self.sql_ref.values = []
+        for mass_entry, intensity_entry in zip(self._mass_list, self._intensity_list):
+            if intensity_entry > 0:
+                new_entry = MassSpectrumEntry(mass=mass_entry, intensity=intensity_entry)
+                self.sql_ref.values.append(new_entry)
 
     @classmethod
     def merge_mass_spectrum_list(cls, mass_spectrum_list: list, required_correlation: float=0.50) -> ('MassSpectrum', numpy.array):
@@ -56,7 +66,7 @@ class MassSpectrum(pyms.Spectrum.MassSpectrum):
         input_size = len(mass_spectrum_list)
         exclude_mapping = numpy.full(input_size, True)
         for _pass_count in range(input_size):
-            assert(sum(exclude_mapping) >= 1)
+            # assert(sum(exclude_mapping) >= 1)
             worst_index = -1
             worst_corr = numpy.Inf
             averaged_spectrum = numpy.mean(spectrum_lists[exclude_mapping], axis=0)

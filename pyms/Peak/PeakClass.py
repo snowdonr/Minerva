@@ -7,6 +7,7 @@ Provides a class to model signal peak.
 #    PyMassSpec software for processing of mass-spectrometry data              #
 #    Copyright (C) 2005-2012 Vladimir Likic                                    #
 #    Copyright (C) 2019-2020 Dominic Davis-Foster                              #
+#    Copyright (C) 2023 Ryan Snowdon                                           #
 #                                                                              #
 #    This program is free software; you can redistribute it and/or modify      #
 #    it under the terms of the GNU General Public License version 2 as         #
@@ -256,10 +257,15 @@ class Peak(AbstractPeak):
 
         self._mass_spectrum = ms
         super().__init__(rt, minutes, outlier)
-        self._im = im
+        # self._im = im  space hog when pickled
         self._area = None
         self._ion_peaks = None  # Not initialised, and empty list is used for peaks with no ions
         self.ion_areas = {}
+
+        if im is not None:
+            self._setup_ions(im)
+        else:
+            pass
 
     def __eq__(self, other) -> bool:
         """
@@ -278,8 +284,6 @@ class Peak(AbstractPeak):
 
     @property
     def area(self):
-        if self._ion_peaks is None:
-            self.setup_ions()
         return self._area
 
     def get_ion_area(self, ion: float) -> Optional[float]:
@@ -514,30 +518,27 @@ class Peak(AbstractPeak):
         if not isinstance(num_ions, int):
             raise TypeError("'n_top_ions' must be an integer")
 
-        if self._ion_peaks is None:
-            self.setup_ions()  # Should already have been called
-
         sorted_ic = sorted(self._ion_peaks, key=lambda x: x.area)
         top_ic = sorted_ic[-num_ions:]
 
         return top_ic
 
-    def setup_ions(self, max_bound: int = 0):
+    def _setup_ions(self, im: BaseIntensityMatrix, max_bound: int = 0):
         """
         """
         if self._ion_peaks is not None:
             raise RuntimeError(f"Ion setup changed for peak {self}")
-        if self._im is None:
+        if im is None:
             raise RuntimeError(f"Cannot calculate ion values for composite peak")
         self._ion_peaks = []
-        mat = self._im.intensity_array
+        mat = im.intensity_array
         ms = self.mass_spectrum
 
         if ms is None:
             raise ValueError("The peak has no mass spectrum.")
 
         rt = self.rt
-        apex = self._im.get_index_at_time(rt)
+        apex = im.get_index_at_time(rt)
 
         # get peak masses with non-zero intensity
         mass_ii = [ii for ii in range(len(ms.mass_list)) if ms.mass_spec[ii] > 0]
@@ -563,9 +564,6 @@ class Peak(AbstractPeak):
         :authors: Andrew Isaac, Sean O'Callaghan, Dominic Davis-Foster
         """
         # get peak masses with non-zero intensity
-        if self._ion_peaks is None:
-            self.setup_ions()
-
         left_list = []
         right_list = []
 
@@ -594,9 +592,6 @@ class Peak(AbstractPeak):
 
         :authors: Sean O'Callaghan,  Dominic Davis-Foster (type assertions)
         """
-        if self._ion_peaks is None:
-            self.setup_ions(max_bound)
-
         if not isinstance(n_top_ions, int):
             raise TypeError("'n_top_ions' must be an integer")
 
@@ -624,9 +619,6 @@ class Peak(AbstractPeak):
         """
         if not isinstance(shared, bool):
             raise TypeError("'shared' must be a boolean")
-
-        if self._ion_peaks is None:
-            self.setup_ions()
 
 #         # check if RT based index is similar to stored index
 #         if is_sequence(peak.bounds):
@@ -805,6 +797,5 @@ class ICPeak(AbstractPeak):
             index += 1
         if edge >= old_edge:
             shared = True
-        index -= 1
 
         return area, index, shared

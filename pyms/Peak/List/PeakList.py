@@ -7,6 +7,7 @@ Functions related to Peak modification.
 #    PyMassSpec software for processing of mass-spectrometry data              #
 #    Copyright (C) 2005-2012 Vladimir Likic                                    #
 #    Copyright (C) 2019-2020 Dominic Davis-Foster                              #
+#    Copyright (C) 2023 Ryan Snowdon                                           #
 #                                                                              #
 #    This program is free software; you can redistribute it and/or modify      #
 #    it under the terms of the GNU General Public License version 2 as         #
@@ -25,92 +26,33 @@ Functions related to Peak modification.
 
 # stdlib
 import math
-from typing import Any, List, Optional, Sequence, Union
+from typing import Any, List, Sequence, Union
 
 # 3rd party
-import numpy  # type: ignore
+import numpy
 
 # this package
 from pyms.IntensityMatrix import BaseIntensityMatrix
 from pyms.Peak.PeakClass import Peak, AbstractPeak
 from pyms.Spectrum import MassSpectrum
-from pyms.Utils.Math import median_outliers
 from pyms.Utils.Time import time_str_secs
 from pyms.Utils.Utils import is_sequence, is_sequence_of
 
 __all__ = ["composite_peak", "fill_peaks", "is_peak_list", "sele_peaks_by_rt"]
 
 
+# composite peak refactor
 # def composite_peak(peak_list: List[Peak], ignore_outliers: bool = False) -> Optional[Peak]:
 #     """
 #     Create a peak that consists of a composite spectrum from all spectra in the list of peaks.
-# 
+#
 #     :param peak_list: A list of peak objects
 #     :param ignore_outliers:
-# 
+#
 #     :return: The composite peak
-# 
+#
 #     :authors: Andrew Isaac, Dominic Davis-Foster (type assertions)
 #     """
-# 
-#     if not is_peak_list(peak_list):
-#         raise TypeError("'peak_list' must be a list of Peak objects")
-# 
-#     first = True
-#     count = 0
-#     avg_rt = 0.0
-#     # new_ms = None
-# 
-#     # DK: first mark peaks in the list that are outliers by RT, but only if there are more than 3 peaks in the list
-#     if ignore_outliers:
-#         rts = []
-#         if len(peak_list) > 3:
-#             for peak in peak_list:
-#                 rts.append(peak.rt)
-# 
-#             is_outlier = median_outliers(rts)
-# 
-#             for i, val in enumerate(is_outlier):
-#                 if val:
-#                     peak_list[i].is_outlier = True
-# 
-#     # DK: the average RT and average mass spec for the compound peak is now calculated from peaks that are NOT outliers.
-#     # This should improve the ability to order peaks and figure out badly aligned entries
-#     ion_peaks = []
-#     for peak in peak_list:
-#         if peak is not None and ((ignore_outliers and not peak.is_outlier) or not ignore_outliers):
-#             ms = peak.mass_spectrum
-# 
-#             if ms is None:
-#                 raise ValueError("The peak has no mass spectrum.")
-# 
-#             spec = numpy.array(ms.mass_spec, dtype='d')
-#             if first:
-#                 avg_spec = numpy.zeros(len(ms.mass_spec), dtype='d')
-#                 mass_list = ms.mass_list
-#                 first = False
-#             # scale all intensities to [0,100]
-#             max_spec = max(spec) / 100.0
-#             if max_spec > 0:
-#                 spec = spec / max_spec
-#             else:
-#                 spec = spec * 0
-#             avg_rt += peak.rt
-#             avg_spec += spec
-#             count += 1
-#             ion_peaks.extend(peak.ion_peaks)
-#     if count > 0:
-#         avg_rt = avg_rt / count
-#         avg_spec = avg_spec / count
-#         new_ms = MassSpectrum(mass_list, avg_spec)
-# 
-#         
-# 
-# 
-# 
-#         return Peak(avg_rt, new_ms)
-#     else:
-#         return None
 
 
 def fill_peaks(
@@ -238,7 +180,6 @@ def is_peak_list(peaks: Any) -> bool:
 
     :author: Dominic Davis-Foster
     """
-
     return is_sequence_of(peaks, AbstractPeak)
 
 
@@ -254,7 +195,6 @@ def sele_peaks_by_rt(
 
     :return: A list of peak objects
     """
-
     if not is_peak_list(peaks):
         raise TypeError("'peaks' must be a Sequence of Peak objects")
 
@@ -279,6 +219,4 @@ def sele_peaks_by_rt(
         rt = peak.rt
         if rt_lo < rt < rt_hi:
             peaks_sele.append(peak)
-
-    # print("%d peaks selected" % (len(peaks_sele)))
     return peaks_sele
