@@ -4,10 +4,7 @@ Created on Oct 1, 2020
 @author: Ryan
 '''
 from __future__ import annotations
-import pyms.IonChromatogram
-import pyms.GCMS.IO.ANDI
-import pyms.GCMS.IO.JCAMP
-import pyms.GCMS.IO.MZML
+
 import pathlib
 import pickle
 import pickletools
@@ -17,17 +14,24 @@ import typing
 import datetime
 import collections
 import logging
+import gzip
+import enum
+
 import openpyxl
 import wx
 import sqlalchemy.orm
-import gzip
-import enum
-from . import settingsfrom . import sql_base
+import pyms.IonChromatogram
+import pyms.GCMS.IO.ANDI
+import pyms.GCMS.IO.JCAMP
+import pyms.GCMS.IO.MZML
+from pyms.Utils.Time import time_str_secs
+from . import settings
+from . import sql_base
 from . import peak_detect
-from pyms.Utils.Time import time_str_secs
 
 
 class SampleSet(collections.UserList):
+    ''' Collection of related samples '''
     def __init__(self, *args, **kwargs):
         self.config = kwargs["config_input"]
         del kwargs["config_input"]
@@ -39,11 +43,10 @@ class SampleSet(collections.UserList):
         self.data = []
 
     def load_directory(self, config: settings.Setting, progress_bar: wx.Gauge=None):
+        ''' Load all samples indicated in the configuration, optionally using corresponding pickled versions from the temp directory '''
         directory_path = pathlib.Path(config.data_path)
         sample_relation_path = pathlib.Path(config.sample_relation_path)
-        internal_standard_path = pathlib.Path(config.internal_standard_path)
-        if not internal_standard_path.is_file():
-            logging.warning(f"Warning: No weights found at {internal_standard_path}, samples will not be normalized!")
+        # internal_standard_path = pathlib.Path(config.internal_standard_path)
         sample_path_list = []
         self._load_subdirectory_recursive(directory_path, sample_path_list)
         if progress_bar is not None:
@@ -52,20 +55,20 @@ class SampleSet(collections.UserList):
             progress_value = 0
 
         excel_map = ExcelMap(config)
-        if config.meta_data_excel and sample_relation_path.is_file():
+        if False and config.meta_data_excel and sample_relation_path.is_file():  # Disabled
             print(f"STATUS: Finished scanning {directory_path}, checking against excel sheet {sample_relation_path}")
             excel_map.file_report(sample_path_list)
-        else:
-            logging.warning(f"Skipping scan of excel metadata at {sample_relation_path}")
 
         print(f"Beginning load of {len(sample_path_list)} files")
         logging.info(f"Start: {datetime.datetime.now()}")
+        opened_file_count = 0
         pickle_samples = []
         pickle_paths = [self._get_pickled_path(path, config) for path in sample_path_list if path.suffix.lower() != ".pickle"]
         if config.read_pickle and len(pickle_paths) > 0:
             for pickle_path in pickle_paths:
                 if pickle_path.is_file() or pickle_path.with_suffix(pickle_path.suffix+".cmp").is_file():
-                    print(f"Opening: {pickle_path}")
+                    print(f"Opening [{opened_file_count}/{len(sample_path_list)}]: {pickle_path}")
+                    opened_file_count += 1
                     logging.info(f"Opening: {pickle_path}")
                     try:
                         if pickle_path.is_file():
@@ -74,8 +77,8 @@ class SampleSet(collections.UserList):
                         else:
                             with gzip.open(pickle_path.with_suffix(pickle_path.suffix+".cmp"), "rb") as pf:
                                 loaded_sample = pickle.load(pf)
-                        if loaded_sample.sample_number is None:
-                            loaded_sample.get_sample_number()  # Recheck file name in case regex is updated
+                        # if loaded_sample.sample_number is None:
+                        loaded_sample.get_sample_number()  # Recheck file name in case regex is updated since pickling
                         if config.limit_loading_memory:
                             loaded_sample.memory_truncate(config.lo_rt_limit, config.hi_rt_limit)
                         pickle_samples.append(loaded_sample)
@@ -88,47 +91,40 @@ class SampleSet(collections.UserList):
                     logging.debug(f"No pickled entry at {pickle_path}")
 
         if config.force_load or len(pickle_samples) < len(sample_path_list):
+            # Do a load of any items that were not available in cached form
             for sample_path in sample_path_list:
                 pickle_path = self._get_pickled_path(sample_path, config)
-                if not pickle_path.is_file() and not pickle_path.with_suffix(pickle_path.suffix+".cmp").is_file():
+                if not pickle_path.is_file() and not pickle_path.with_suffix(pickle_path.suffix+".cmp").is_file()\
+                        or config.overwrite_pickle:
                     new_sample = Sample(sample_path, config)
                     if new_sample.entry_status:
                         self.data.append(new_sample)  # .data from UserList implementation
-                        if config.create_pickle:
-                            print("Saving .pickle cache")
+                        if config.create_pickle or config.overwrite_pickle:
                             new_sample.save(pickle_path)
-                elif config.overwrite_pickle:  # Assumed to be loaded in earlier loop
-                    new_sample = Sample(sample_path, config)
-                    if new_sample.entry_status:
-                        self.data.append(new_sample)
-                        new_sample.save(pickle_path)
 
                 if progress_bar is not None:
                     progress_value += 1  # Might be able to exceed max if a pickle is reloaded
                     try:
                         progress_bar.SetValue(progress_value)
                     except Exception as _e:
-                        pass
-
+                        logging.debug(f"Progress bar update failed {progress_value}")
         self.data.extend(pickle_samples)
-
         if len(self.data) < 1:
-            logging.error("ERROR: No files found for processing")
+            logging.error("**No files found for processing** Aborting...")
             return False
 
-        # self._print_debug()
-
         for current_sample in self.data:
-            current_sample.load_meta_from_excel(excel_map)
+            current_sample.config = self.config  # override cached configuration TODO: Don't cache it at all
+            # current_sample.load_meta_from_excel(excel_map)
             current_sample.check_type()
 
         print(f"STATUS: Filtering data by baseline")
-        for current_sample in self.data:
-            # baseline is created on first call. Must be after sample types are loaded
-            try:
+        try:
+            for current_sample in self.data:
+                # baseline is created on first call. Must be after sample types are loaded
                 current_sample.filter_by_baseline(self.baseline_at)
-            except Exception as _e:
-                logging.exception("Could not filter samples under baseline")
+        except Exception as _e:
+            logging.warning("Could not filter samples under baseline")
 
         print(f"STATUS: Finished loading {len(self)} samples")
         logging.info(f"Finish {datetime.datetime.now()}")
@@ -158,30 +154,25 @@ class SampleSet(collections.UserList):
                 result_list.append(item)
 
     def export_all_samples(self, directory: pathlib.Path):
+        ''' Export .dat files for all samples '''
         for sample_data in self.data:
             file_name = sample_data.path.stem + ".dat"
             # pyms.Utils.IO.save_data(directory / file_name, sample_data.im.intensity_array)
             sample_data.im.export_leco_csv(directory / file_name)
 
-#     def load_dat_samples(self, directory: pathlib.Path, config: settings.Setting):
-#         for sample_data_file in directory.iterdir():
-#             if sample_data_file.suffix == ".dat":
-#                 iim = pyms.IntensityMatrix.IntensityMatrix([0], [0], [[0]])
-#                 iim.import_leco_csv(sample_data_file)
-#                 new_sample = Sample(None, config)
-#                 new_sample.path = sample_data_file
-#                 new_sample._load_from_im(iim)
-#                 self.data.append(new_sample)
-
     @property
     def full_baseline(self) -> numpy.array:
+        ''' Baseline as a full array, see baseline_at for single points '''
         if self._baseline is None:
             self._baseline, self._baseline_rt = self._create_baseline(self.config.baseline_moving_average_width)
         return self._baseline
 
     def baseline_at(self, rt_s) -> float:
+        ''' The baseline entry near rt_s, baseline is calculated on first call '''
         if self._baseline is None:
             self._baseline, self._baseline_rt = self._create_baseline(self.config.baseline_moving_average_width)
+        if self._baseline is None or self._baseline_rt is None:
+            return None
         insert_index = numpy.searchsorted(self._baseline_rt, rt_s, side='left')
         if insert_index <= 0:
             return self._baseline[0]
@@ -190,7 +181,7 @@ class SampleSet(collections.UserList):
         else:
             return self._baseline[insert_index]
 
-    def _create_baseline(self, moving_average_width=5):
+    def _create_baseline(self, moving_average_width=5) -> [numpy.array, float]:
         # create a baseline using samples flagged as blanks, by checking the moving [averaged minimum] tic
         x_list = []
         y_list = []
@@ -201,7 +192,7 @@ class SampleSet(collections.UserList):
                 y_list.append(numpy.array(input_ic.intensity_array))
         if len(y_list) < 1:
             logging.error("No blank samples found to create baseline")
-            return numpy.array([]), numpy.array([])
+            return None, None  # numpy.array([]), numpy.array([])
         array_length = min([len(y_array) for y_array in y_list])
         x_stacked = numpy.vstack([x_array[:array_length] for x_array in x_list])
         y_stacked = numpy.vstack([y_array[:array_length] for y_array in y_list])
@@ -213,15 +204,18 @@ class SampleSet(collections.UserList):
         raw_baseline = moving_avg[(moving_average_width//2)-1:-(moving_average_width//2)] / moving_average_width
         return raw_baseline*self.config.baseline_multiplier, blank_rt
 
-    def get_tic(self, index: int):
-        if index >= len(self):
-            logging.warning(f"Could not plot tic, no sample at index {index}")
-            return
+    def get_tic(self, index: int) -> pyms.IonChromatogram.IonChromatogram | None:
+        ''' TIC at a given index '''
+        if index >= len(self) or index < 0:
+            logging.warning(f"Could not get tic, no data at index {index}")
+            return None
         return self.data[index].get_tic()
 
-    def remove_zero_peak_samples(self):
+    def remove_zero_peak_samples(self) -> None:
+        ''' Remove samples that don't contain any peaks (typically blanks) '''
         self.data[:] = [x for x in self.data if len(x.peak_list) > 0]
 
+# Example Inherited methods
 #     def __init__(self, data=[]):
 #         self._list = []
 #         self.update(data)
@@ -339,6 +333,7 @@ class ExcelMap(object):
                 self._standard_headers[cell.value] = index
 
     def full_sample_list(self) -> list:
+        ''' '''
         # TODO: Calculate and store immediately?
         result = []
         count_none = 0  # Not included in output, report this?
@@ -383,15 +378,12 @@ class ExcelMap(object):
         for key, entry_list in used_file_dict.items():
             print(f"Sample: {key}")
             for entry in entry_list:
-                file_size = entry.data_file.stat().st_size
-                if file_size < 7000000:
-                    file_type = "SIM "
-                else:
-                    file_type = "SCAN"
-                print(f"     {file_type}  {entry.data_file}  {entry.dose}  {entry.base_sample}  {entry.comment}")
+                # file_size = entry.data_file.stat().st_size
+                print(f"    {entry.data_file}  {entry.dose}  {entry.base_sample}  {entry.comment}")
         print("**End File Report**")
 
-    def find_data(self, target_sample_number: int) -> typing.Tuple[int, float, str]:
+    def find_data(self, target_sample_number: int) -> typing.Tuple[int, float, str] | None:
+        ''' Return sample matching the sample number or None if nothing matches '''
         if target_sample_number in self.base_sample_list.keys():
             return self.base_sample_list[target_sample_number][0]  # The vase sample is always the first entry in the list, with empty values
         else:
@@ -403,7 +395,7 @@ class ExcelMap(object):
 
 
 class ExcelEntry(object):
-    # TODO: Slots
+    # TODO: Slots?
     def __init__(self, base_sample=None, dose=None):
         self.base_sample = base_sample
         self.derived_sample = None
@@ -418,6 +410,7 @@ class ExcelEntry(object):
 class Sample(sql_base.Base):
     '''
     Data store for all information related to a GCMS run, including integrated peaks and meta-data
+    SQL elements for some, but not all, data
     '''
     __tablename__ = "Lab_Sample_Analysis"
     id = sqlalchemy.Column(sqlalchemy.Integer, primary_key=True)
@@ -447,12 +440,14 @@ class Sample(sql_base.Base):
         self.min_mass = None
         self.max_mass = None
         self._tic = None
+        self.total_area = None
 
         self.get_sample_number()
         self.peak_source = peak_detect.Parse_IM(self)
 
         if raw_data_path is not None:
             if config.profile_load:
+                # Profile execution for speed optimisation
                 import cProfile
                 import pstats
                 profileName = 'profile.out'
@@ -461,7 +456,6 @@ class Sample(sql_base.Base):
                     p = pstats.Stats(profileName)
                     p.strip_dirs().sort_stats('time').print_stats(30)
                     p.strip_dirs().sort_stats('cumulative').print_stats(40)
-                    # p.strip_dirs().sort_stats('tottime').print_stats(80)
                 except Exception as _e:
                     print("Unable to save debug profile")
             else:
@@ -469,26 +463,34 @@ class Sample(sql_base.Base):
 
     @staticmethod
     def get_area(peak, replacement=0.0):
+        ''' replacement value is returned if the peak area does not exist '''
         try:
             value = peak.area
         except AttributeError as _e:
-            value = replacement  # numpy.NaN, If there is no peak for a sample, input to this is: peak==None
+            value = replacement
         return value
 
-    @classmethod
-    def extract_sample_number(cls, file_string: str) -> int:
-        file_name_match = re.match(r"(PRG|W\d+)-([^-]+).*", file_string)
+    def extract_sample_label(self, file_string: str) -> int:
+        ''' Extract digits from the file name to label plots '''
+
+        extract_re = self.config.sample_label_extract_re.replace("/", "\\")  # TODO: Test
+        file_name_match = re.match(extract_re, file_string)
         if file_name_match is not None:
-            return file_name_match.group(2)
+            try:
+                return file_name_match.group(1)
+            except IndexError:
+                return file_string
         else:
             return file_string
 
     def get_sample_number(self):
-        self.sample_number = self.extract_sample_number(self.path.stem)
+        ''' Populate sample number from file name '''
+        self.sample_number = self.extract_sample_label(self.path.stem)
         if self.sample_number is None:
             logging.error(f"Could not parse sample id from {self.path}")
 
     def _load_file_type(self, path_input: pathlib.Path):
+        ''' returns None if read failed or type unrecognized '''
         data = None
         try:
             if path_input.suffix.lower() == ".cdf":
@@ -523,33 +525,31 @@ class Sample(sql_base.Base):
             logging.error(f"Could not load any compatible data at {path_input}")
             return False
         self._raw_data = data
-        # data.trim(4101, 4350)
-        self.im = pyms.IntensityMatrix.build_intensity_matrix_i(data)  # default bin -0.3 +0.7
+        self.im = pyms.IntensityMatrix.build_intensity_matrix_i(data)  # default bin is -0.3 +0.7
         self.min_mass = self.im.min_mass
         self.max_mass = self.im.max_mass
         self.peak_list = self.peak_source.load_from_im(self.im)
         return True
 
     def filter_by_baseline(self, baseline_function):
-        """ Removes peaks below the scaled baseline """
+        ''' Removes peaks below the scaled baseline '''
         filtered_peaks = [x for x in self.peak_list if sum(x.mass_spectrum.intensity_list) >= baseline_function(x.rt)]
         logging.info(f"Filtered peaks from {len(self.peak_list)} to {len(filtered_peaks)}")
         self.peak_list = filtered_peaks
 
     def get_tic(self) -> pyms.IonChromatogram.IonChromatogram:
+        ''' Store calculate and store _tic '''
         if not hasattr(self, '_tic') or self._tic is None:  # TODO: hasattr can be removed once cache files are updated
             intensity_matrix = self.im
             intensity_array = sum(intensity_matrix.intensity_array.T)
             self._tic = pyms.IonChromatogram.IonChromatogram(intensity_array, intensity_matrix.time_list)
         return self._tic
 
-#     def get_scan_index(self, peak):
-#         pass
-
     def memory_truncate(self, low_limit, high_limit):
+        ''' Remove intermediate values to reduce the memory used by the sample '''
         self.min_mass = self.im.min_mass
         self.max_mass = self.im.max_mass
-        self.get_tic()
+        self.get_tic()  # Force calculation and storage of tic
         self.im = None
         self._raw_data = None
         rt_low = time_str_secs(low_limit)
@@ -557,7 +557,8 @@ class Sample(sql_base.Base):
         new_peak_list = [x for x in self.peak_list if rt_low < x.rt < rt_high]
         self.peak_list = new_peak_list
 
-    def mass_spec(self, scan_index: int):
+    def mass_spec(self, scan_index: int) -> 'MassSpectrum':
+        ''' Mass spectrum at a single scan_index, not retention time '''
         return self.im.get_ms_at_index(scan_index)
 
     def load_meta_from_excel(self, excel_map: ExcelMap):
@@ -575,56 +576,61 @@ class Sample(sql_base.Base):
         self.standard_weights = map_result.standard_weights
 
     def check_type(self):
-        # Marks a sample as standard, blank, or sample
+        ''' Use the sample_number identifier to classify the type using reg exp in the configuration '''
         if re.search(self.config.blank_name_search, self.sample_number, flags=re.IGNORECASE) is not None:
             self._type = SampleType.blank
         elif re.search(self.config.standard_name_search, self.sample_number, flags=re.IGNORECASE) is not None:
-            self._type = SampleType.standard  # TODO: Update name   
+            self._type = SampleType.standard
         else:
             self._type = SampleType.sample
+        # TODO: Consider adding a sample regex and a default unknown type
 
     @property
-    def type(self):
+    def type(self) -> 'SampleType':
+        ''' SampleType classification originally found from the file name '''
         if self._type is None:
             self.check_type
         return self._type
 
-    def get_filtered_peaks(self, peak_filter):
+    def get_filtered_peaks(self, peak_filter: typing.Callable[['Peak'], bool]) -> list:
+        ''' Apply a filter function to self.peak_list to remove some peaks '''
         try:
             return [peak for peak in self.peak_list if peak_filter(peak)]
         except Exception as _e:
             logging.exception("Failed to load peak areas")
 
-    def get_standard_peaks(self):
+    def get_standard_peaks(self) -> dict:
+        ''' Creates a dictionary of the 'best' peaks for each item in the standard_list '''
         result = {}
         for peak_name, fragment_mass, estimated_rt in self.config.standard_list:
             if estimated_rt is None:
                 continue  # Skip this compound, the peak isn't reliable enough
             best_peak = None
             best_rt_error = self.config.standard_maximum_rt_error+1
-            best_intensity = 0
             for peak in self.peak_list:
+                # TODO: bisect list to avoid checking early rt, config max accepted rt error
                 fragment_intensity = peak.mass_spectrum.get_intensity_for_mass(fragment_mass)
                 if fragment_intensity > self.config.standard_minimum_intensity:
                     rt_error = abs(estimated_rt-peak.rt)
                     if rt_error < best_rt_error:
                         best_peak = peak
                         best_rt_error = rt_error
-                        best_intensity = fragment_intensity
                     if peak.rt > estimated_rt+best_rt_error:  # peaks are in sorted order by rt, and we've gone past
                         break
-            result[peak_name] = (best_peak, best_rt_error)  # Peak names must be unique
+            result[peak_name] = (best_peak, best_rt_error)  # Peak names from the standard list must be unique
         return result
 
-    def get_standard_weights(self, standard_name_list):
+    def get_standard_weights(self, standard_name_list: list) -> list:
         return [self.standard_weights[x] for x in standard_name_list]
 
     def get_mass_sums(self, min_mass, max_mass):
+        ''' Total intensity in all scans between two masses, inclusive '''
         intensity_matrix = self.im.intensity_matrix
         filtered_range = (min_mass <= numpy.array(self.im.mass_list)) & (numpy.array(self.im.mass_list) <= max_mass)
         return numpy.sum(intensity_matrix[:, filtered_range], axis=0)
 
     def save(self, target_path: pathlib.Path):
+        ''' Pickle this object (except self.peak_source) and save to the given path '''
         _temp_source = self.peak_source
         self.peak_source = None
         opt_pickle = pickletools.optimize(pickle.dumps(self))
@@ -634,9 +640,11 @@ class Sample(sql_base.Base):
         else:
             with open(target_path, 'wb') as file_out:
                 file_out.write(opt_pickle)
-            # self.peak_source = _temp_source
+        # Don't bother restoring the peak_source, it currently isn't used beyond this point and takes appreciable memory
+        # self.peak_source = _temp_source
 
     def __eq__(self, other):
+        ''' Compare by im and peak_list '''
         return self.im == other.im and self.peak_list == other.peak_list
 
     def __str__(self):
@@ -653,3 +661,4 @@ class SampleType(enum.Enum):
     blank = 0
     sample = 1
     standard = 2
+    # unknown?

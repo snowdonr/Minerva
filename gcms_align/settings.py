@@ -15,10 +15,10 @@ class Setting(object):
     Some parameters can be updated via UI and will be saved to configparser, not here
     '''
 
-    settings_version = "0.8"
-    method_analysis_name = "Requires Unique Analysis Name"
+    settings_version = "0.9"
+    method_analysis_name = "Analysis Name"
     experiment_name = "Experiment X"
-    # **NOTE! Changes here may require deletion of invalid pickle temporary files**
+    # **NOTE! Changes here may require manual deletion of invalid pickle temporary files**
     data_path = r"C:/GCMS/Minerva/SourceFolder.AIA"
     temp_path = r"C:/GCMS/Minerva/Data_Cache"
     pairwise_temp_file = r"_pairwise_relations.tmp"
@@ -26,12 +26,8 @@ class Setting(object):
     internal_standard_path = r"C:/GCMS/Minerva/"
     user_library_location = "C:/GCMS/Minerva/Libraries/UserLibrary.xlsx"
     output_sqlite = True
-    remote_db_location = "?.ca-central-1.rds.amazonaws.com"
-    db_username = "postgres"
-    db_password = ""
-    db_name = "minerva"
 
-    main_nist_path = r"C:/NIST11/MSSEARCH/mainlib"
+    main_nist_path = r"C:/NIST11/MSSEARCH/mainlib"  # Unused
     nist_working_dir_path = r"C:/GCMS/Minerva/Data_Cache"
 
     read_pickle = True
@@ -47,7 +43,6 @@ class Setting(object):
     baseline_multiplier = 1.0
 
     analysis_directory = r"C:/GCMS/Minerva/ExperimentData"
-    # result_folder = r"E:/GCMS/Minerva"
     summary_file_path = r"C:/GCMS/Minerva/Summary.csv"
     tophat_baseline_noise_smooth = "1.5m"
     load_align_pickle = True
@@ -66,25 +61,36 @@ class Setting(object):
     # Define the within-state alignment parameters.
     rt_sensitivity_s = 2.5  # rt modulation [s]
     gap_penalty = 0.40
+    max_alignment_score = 0.7  # 0 best, 1 worst score; Eliminate matches above this threshold
+    max_alternate_match_score = 0.5  # All possibilites below this score will be considered for alignment
+    mismatch_score = 1.0  # How to adjust the total alignment score when a peak has no matches
+    align_section_size = 12
+    align_section_lookahead = 15
 
     align_multiprocess = False
-    align_sparse_mode = True
+    align_sparse_mode = True  # Non-exhaustive alignment check; i.e. check less alignment options
     align_diagonal_width = 4
     align_full_compare = (0, 5, 10, 15, 20)
     align_score_full = False
     align_score_backtrack = 4  # Reverse check of the ~diagonal score matrix
     align_end_row_check = 80
+    
+    align_calculate_alternative = True
+    ll_align_alg = False
 
     library_rt_scale = 2.5  # multiplier applied to rt_sensitivity for library scoring
     minimum_compound_score = 0.001  # score to list compound option in result
-    spectrum_merge_required_match_portion = 0.3
+    # spectrum_merge_required_match_portion = 0.3
 
     limit_loading_memory = False
+    identify_minimum_area = 30000
+
     meta_data_excel = False
     merge_aligned_peaks = True
     merge_compare_normalize = True
-    consider_rt_range = 15
-    max_relation_grouping_depth = 3
+    consider_rt_range = 15  # in seconds
+    max_relation_grouping_depth = 3  # second peak grouping for QC or grouping related peaks
+
     require_all_peaks = False  # Align result must have a peak in each sample
     divide_samples = False  # Enables normalization by one of the following methods:
     # divide_type = 'weights_only'  # mutually exclusive with other divide types
@@ -95,33 +101,23 @@ class Setting(object):
     # Name, Fragment masses and estimated retention times (in seconds) for the standards that are used in normalization
     # *Names must be unique*
     standard_list = ["Naphthalene-D8", ]
-    # ("d10 Phenanthrene", 178+10, 2058),  # mass 97 cluttered
-    # ("1,1 Binaphthyl", 254, 2550),  #
-    # ("Squalane", 85, None),  # n-alkanes
-    # ("d4 Cholestane", 217+4, 3853),  # mass 376
-    # ("d16 Adamantane", 102, 1152),  # 136+16 rt 1152*, 1243, 1280  base fragments 79, 93
-    # ("d30 Phenyldodacane", 138, 2642),  # mass 100 246+30 rt 2643*, 2878  Missing
-    # ("d32 Pentadecane", 212+32, 2008),
-    # ("d52 Pentacosane", 138, 3435)  # 352+52+1 rt 3435, very small  Missing
 
     standard_minimum_intensity = 1e4  # for selected fragment
     standard_maximum_rt_error = 120
 
     filter_minimum_area = 5e5
     manual_baseline_section_rt = 25  # minutes
-    analyze_mass_sums = True
-    analyze_peak_areas = True
+    # analyze_mass_sums = True
+    # analyze_peak_areas = True
     restrict_to_mass_scan = True  # Default plot zoom during identification does not show library below scan
 
-    do_lasso = True
-    do_lars_lasso = True  # Default fold requires >5 samples
-    do_linear_svc = True
-    do_bayesian_ridge = True
-
-    lasso_alpha = 0.8  # Higher -> fewer features
-    normalize_mean = True
-    normalize_std = False
+    # normalize_mean = True
+    # normalize_std = False
     profile_load = False
+    comparison_export = False
+    comparison_skip_empty = True
+    sample_label_extract_re = r"\D*(\d+)\D*.*"
+    # .*-/d+-(.*)-.*
     blank_name_search = "qc-etoh"
     standard_name_search = "std-"
 

@@ -12,7 +12,6 @@ from sqlalchemy import Column, Integer, Float, String, ForeignKey
 from .sql_base import Base
 from . import identification
 
-# alembic database migration?
 DEBUG_SQL = False
 
 
@@ -60,7 +59,8 @@ class SQL_Interface(object):
         result.update(vars(input_object))
         return result
 
-    def search_compounds(self):  # , target_formula: str, target_cas: str) -> typing.Optional['Compound_SQL']:
+    def create_search_compounds(self):  # , target_formula: str, target_cas: str) -> typing.Optional['Compound_SQL']:
+        ''' Create an object to be searched for compound information '''
         result = self.session.execute(sqlalchemy.select(identification.UserEntry))  # .where((Compound_SQL.formula == target_formula) & (Compound_SQL.cas == target_cas)))
         return result.fetchall()
 
@@ -128,38 +128,3 @@ class CompoundMatch_SQL(Base):
     score = Column(Float, nullable=True)
     source = Column(String, nullable=True)
     match_type = Column(String, nullable=True)
-
-
-# class Compound_SQL(Base):  # TODO: Merge/Inherit with identification.UserEntry
-#     __tablename__ = "Compound"
-#     id = Column(Integer, primary_key=True)
-#     name = Column(String, nullable=False)
-#     formula = Column(String, nullable=True)
-#     mw = Column(Integer, nullable=True)
-#     cas = Column(String, nullable=True)
-#     flavors = Column(String, nullable=True)
-#
-#     aligned_match = sqlalchemy.orm.relationship("CompoundMatch_SQL", back_populates="compound")
-#
-#     @staticmethod
-#     def dict_key(compound_instance):
-#         if compound_instance.formula is not None:
-#             if compound_instance.cas is not None and not compound_instance.cas.startswith("0"):
-#                 cmpd_key = compound_instance.formula +':'+ compound_instance.cas
-#             else:
-#                 cmpd_key = compound_instance.formula +':'+ str(compound_instance.name.encode("utf-8"))
-#         else:
-#             cmpd_key = str(compound_instance.name.encode("utf-8"))
-#         return cmpd_key
-#
-#     @property
-#     def key(self):
-#         return Compound_SQL.dict_key(self)
-#
-#     def __hash__(self):
-#         return hash(self.key)
-#
-#     def __eq__(self, other):
-#         if isinstance(other, Compound_SQL):
-#             return self.key == other.key
-#         return NotImplemented

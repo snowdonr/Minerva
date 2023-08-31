@@ -33,7 +33,7 @@ class GeneralPlotFrame(wx.Frame):
         self.Layout()
         self.Show()
 
-    def create_main_panel(self):
+    def create_main_panel(self, skip_buttons=False):
         """ Creates the main panel with all the controls on it:
              * mpl canvas
              * mpl navigation toolbar
@@ -62,13 +62,14 @@ class GeneralPlotFrame(wx.Frame):
         self.toolbar = NavigationToolbar(self.canvas)
         self.toolbar.Realize()
 
-        self.button_sizer = wx.BoxSizer(wx.HORIZONTAL)
-        previous_button = wx.Button(self, wx.ID_ANY, "Previous")
-        self.Bind(wx.EVT_BUTTON, self.on_previous, previous_button)
-        self.button_sizer.Add(previous_button, 0, flag=wx.ALIGN_LEFT)
-        next_button = wx.Button(self, wx.ID_ANY, "Next")
-        self.Bind(wx.EVT_BUTTON, self.on_next, next_button)
-        self.button_sizer.Add(next_button, 0, flag=wx.ALIGN_LEFT)
+        self.button_sizer = wx.BoxSizer(wx.HORIZONTAL)  # This sizer is also used by inherited classes
+        if not skip_buttons:
+            previous_button = wx.Button(self, wx.ID_ANY, "Previous")
+            self.Bind(wx.EVT_BUTTON, self.on_previous, previous_button)
+            self.button_sizer.Add(previous_button, 0, flag=wx.ALIGN_LEFT)
+            next_button = wx.Button(self, wx.ID_ANY, "Next")
+            self.Bind(wx.EVT_BUTTON, self.on_next, next_button)
+            self.button_sizer.Add(next_button, 0, flag=wx.ALIGN_LEFT)
 
         self.Bind(wx.EVT_CLOSE, self.on_close)
         self.vbox = wx.BoxSizer(wx.VERTICAL)
@@ -108,7 +109,7 @@ class SampleSetPlot(GeneralPlotFrame):
         self._last_x_values = None
 
     def create_main_panel(self):
-        super().create_main_panel()
+        super().create_main_panel(skip_buttons=True)
         sizer = self.button_sizer
         label_text = wx.StaticText(self, -1, "     Get details from RT:")
         sizer.Add(label_text, 0, flag=wx.ALIGN_CENTER_VERTICAL)
@@ -158,6 +159,7 @@ class SampleSetPlot(GeneralPlotFrame):
         self._last_source_data = aligned_data
         # alternatively transpose and use pandas box plot
         area_lists = [[0 if x is None else x.area for x in aligned_row] for aligned_row in aligned_data]
+
         area_grid = numpy.array(area_lists)
         area_max_set = area_grid.max(axis=1).argsort()
         max_filter = area_max_set[-max_peaks_to_show:]  # Ordered smallest to largest
@@ -174,8 +176,8 @@ class SampleSetPlot(GeneralPlotFrame):
 
         self._last_x_values = rt_filter[rt_sorting]
         self._last_data_filtered = numpy.zeros(max_peaks_to_show, dtype=object)
-        for x in range(max_peaks_to_show):
-            self._last_data_filtered[x] = aligned_data[max_filter[rt_sorting][x]]
+        for i, sorted_index in enumerate(max_filter[rt_sorting]):
+            self._last_data_filtered[i] = aligned_data[sorted_index]
         if USE_BOXPLOT_ONLY:
             self.current_plot.boxplot(filtered_areas)
             tick_labels = [f"{(x/self.TIME_NORM):.2f}" for x in self._last_x_values]
@@ -196,8 +198,8 @@ class SampleSetPlot(GeneralPlotFrame):
             new_size = int(numpy.median([x.shape[0] for x in x_list]))
             [x.resize(new_size, refcheck=False) for x in x_list]  # In place truncate, affects all views
             [x.resize(new_size, refcheck=False) for x in y_list]
-            average_x = numpy.mean(x_list, axis=0)
-            average_y = numpy.mean(y_list, axis=0)
+            average_x = numpy.mean(x_list, axis=0)[:-3]  # TODO: Sort out edge effects instead of truncating
+            average_y = numpy.mean(y_list, axis=0)[:-3]
             if log_scale:
                 average_y = numpy.log10(average_y+1)
 
@@ -224,6 +226,7 @@ class SampleSetPlot(GeneralPlotFrame):
 
 class PeakDetailPlots(GeneralPlotFrame):
     '''
+    A set of plots related to a single aligned peak set
     '''
     def __init__(self, main_project: project.Project):
         super().__init__("Aligned Peak sets")
@@ -235,9 +238,10 @@ class PeakDetailPlots(GeneralPlotFrame):
         self._rt_list = []
         self._select_sample_index = 0
         self._override_compound_update = False
-        del self.current_plot
+        del self.current_plot  # TODO: Clean up inheritance
         self.fig.clear()
         count_width = 2
+        self.normalize_area = True
         axes1 = self.fig.add_subplot(self.plot_count//count_width, count_width, 1)
         axes2 = self.fig.add_subplot(self.plot_count//count_width, count_width, 2)
         if QC_PLOT_MODE:
@@ -257,20 +261,20 @@ class PeakDetailPlots(GeneralPlotFrame):
         sizer.Add(self.select_compound, 0, flag=wx.ALIGN_LEFT)
         self.Bind(wx.EVT_COMBOBOX, self.on_change_compound, self.select_compound)
 
-        self.confirm_compound = wx.Button(self, wx.ID_ANY, "Confirm compound id")
-        sizer.Add(self.confirm_compound, 0, flag=wx.ALIGN_LEFT)
-        self.Bind(wx.EVT_BUTTON, self.on_confirm_compound, self.confirm_compound)
+        # self.confirm_compound = wx.Button(self, wx.ID_ANY, "Confirm compound id")
+        # sizer.Add(self.confirm_compound, 0, flag=wx.ALIGN_LEFT)
+        # self.Bind(wx.EVT_BUTTON, self.on_confirm_compound, self.confirm_compound)
         self.Layout()
         self.Show()
-        # source_reference.formula
-        # source_reference.synonyms
 
     def update_data(self, rt_list: list, data: numpy.ndarray):
-        self.Show()
+        ''' Change source data for all potential peak sets '''
+        self.Show()  # Display this window, if it has not been used yet this session
         self._rt_list = rt_list
         self._source_data = data
 
     def show_data(self, target_rt_index: int):
+        ''' Set a new aligned peak set, and update all subplots from the largest area sample in the set '''
         if target_rt_index < 0:
             target_rt_index = len(self._rt_list)-1
         elif target_rt_index >= len(self._rt_list):
@@ -283,10 +287,11 @@ class PeakDetailPlots(GeneralPlotFrame):
         max_sample_index = numpy.argmax([0 if x is None else x.area for x in data])
         self._select_sample_index = max_sample_index
         self._source_peaks = data
-        self.update_right(max_sample_index, target_rt_index)
+        self.update_sample_subplots(max_sample_index, target_rt_index)
         self.update_plot()
 
-    def update_right(self, sample_index, target_rt_index):
+    def update_sample_subplots(self, sample_index, target_rt_index):
+        ''' Update 3 sub-plots with data from a single sample '''
         frag_mass_range = self._mass_spec_plot(self.plots[1], sample_index)
         library_mass_range = self._library_plot(self.plots[3], self._source_peaks, sample_index)
         if self._project.config.restrict_to_mass_scan:
@@ -309,7 +314,7 @@ class PeakDetailPlots(GeneralPlotFrame):
         legend_str = f"{source_reference.name}({source_reference.formula}) mw:{source_reference.mw}"  # CAS {reference.cas}
         intensities = library_ms.intensity_list
         masses = library_ms.mass_list
-        plt = current_plot.stem(masses, intensities, label=legend_str)
+        _plt = current_plot.stem(masses, intensities, label=legend_str)
 
         self._annotate_largest(current_plot, masses, intensities)
         current_plot.legend()
@@ -336,11 +341,17 @@ class PeakDetailPlots(GeneralPlotFrame):
         current_plot.clear()
         target_rt = self._rt_list[target_rt_index]
         sample_labels = [f"{x.sample_number}" for x in self._project._analysis_set._alignment_data.remaining_samples]
-
         sample_labels = self.remove_common_string_parts(sample_labels)
 
         param_get = operator.attrgetter(parameter_name)
-        y_values = [numpy.NaN if x is None else param_get(x) for x in data]
+        y_values = numpy.array([numpy.NaN if x is None else param_get(x) for x in data])
+        if self.normalize_area:
+            sample_areas = numpy.array([x.total_area for x in self._project._analysis_set._alignment_data.remaining_samples])
+            if all(sample_areas > 0):
+                y_values = 1000*y_values/sample_areas
+            else:
+                logging.error(f"Total area {sample_areas}")
+
         plt = current_plot.plot(sample_labels, y_values, marker='x', picker=5)
         plt[0].callback_plot = callback_target
 
@@ -383,7 +394,7 @@ class PeakDetailPlots(GeneralPlotFrame):
         sample_id = self._sample_set[sample_index].sample_number
         peak_data = self._source_peaks[sample_index]
 
-        stem_plot = current_plot.stem(peak_data.mass_spectrum.mass_list, peak_data.mass_spectrum.intensity_list)
+        _stem_plot = current_plot.stem(peak_data.mass_spectrum.mass_list, peak_data.mass_spectrum.intensity_list)
         current_plot.plot(peak_data.ion_areas.keys(), numpy.array(list(peak_data.ion_areas.values()))/8.0, 'x')
         
         self._annotate_largest(current_plot, peak_data.mass_spectrum.mass_list, peak_data.mass_spectrum.intensity_list)
@@ -480,7 +491,7 @@ class PeakDetailPlots(GeneralPlotFrame):
             selected_raw_data = self._select_compound_data[selected_index]
 
             aligned_peak = self._project.aligned_peaks[self._current_rt_index]
-            
+
             # self._select_sample_index
             print("Unimplemented: Adding confirmation for compound")
             aligned_peak.update_compound(selected_raw_data, "UserConfirmed-Minerva")
@@ -491,7 +502,7 @@ class PeakDetailPlots(GeneralPlotFrame):
         event.artist.callback_plot
         self._override_compound_update = True
         self._select_sample_index = event.ind[0]
-        self.update_right(self._select_sample_index, self._current_rt_index)
+        self.update_sample_subplots(self._select_sample_index, self._current_rt_index)
         self.update_plot()
         self._override_compound_update = False
 
@@ -502,103 +513,103 @@ class PeakDetailPlots(GeneralPlotFrame):
         self.show_data(self._current_rt_index-1)
 
 
-class FeaturePlot(GeneralPlotFrame):
-    ''' Compare meta-data for multiple samples '''
-    def __init__(self):
-        super().__init__("Feature Detail Plot")
-        self.pair_length = 3
-        del self.current_plot
-        self.fig.clear()
-        self.plots = []
-        for index in range(self.pair_length*2):
-            axes = self.fig.add_subplot(self.pair_length, 2, index+1)
-            self.plots.append(axes)
-        self.select_subplot(0)
-        self.first_feature_display = 0
-
-    def select_subplot(self, plot_number):
-        if plot_number < self.pair_length and plot_number >= 0:
-            self.selected_plot_index = plot_number
-            self.current_plot_left = self.plots[plot_number*2]
-            self.current_plot_right = self.plots[plot_number*2+1]
-        else:
-            print(f"No plots available for display at {plot_number}")
-
-    def clear_feature(self):
-        self.current_plot_left.clear()
-        self.current_plot_right.clear()
-
-    def load_all_features(self, sample_set, feature_sources, regression_response_list):
-        self.first_feature_display = 0
-        self.sample_set = sample_set
-        self.dose_set = [current_sample.dose for current_sample in sample_set]
-        self.feature_sources = feature_sources
-        self.feature_regression_response = regression_response_list
-
-    def update_feature_set(self, feature_index):
-        self.first_feature_display = feature_index
-        for i in range(self.pair_length):
-            if feature_index+i < 0 or feature_index+i >= len(self.feature_sources):
-                print(f"No data to display at feature {feature_index+i}")
-                continue
-            self.select_subplot(i)
-            self.clear_feature()
-            source_data = self.feature_sources[feature_index+i]
-            try:
-                mass_data_set = isinstance(source_data[0], int)
-            except Exception as _e:
-                mass_data_set = False
-
-            if mass_data_set:
-                self.current_plot_left.plot(self.dose_set, source_data[1], "x-", label="Total Ion Area")
-                self.current_plot_left.set_title(f"Feature {feature_index+i}: Total mass at {source_data[0]}")
-                self.current_plot_left.set_xlabel("Dose")
-                self.current_plot_left.set_ylabel("Total Fragment Area")
-                self.current_plot_right.clear()  # Redundant, replace with some kind of plot?
-                self.current_plot_right.set_title(f"Feature coef={self.feature_regression_response[feature_index+i]:.5f}")
-            else:
-                peak_set = source_data
-                areas = [sample.Sample.get_area(peak) for peak in peak_set]
-                self.current_plot_left.plot(self.dose_set, areas, "x-", label="Ion Area")
-                try:
-                    rt = numpy.average([peak.rt for peak in peak_set if peak is not None])  # TODO: Check deviation
-                    self.current_plot_left.set_title(f"Feature {feature_index+i}: Peak at time {rt/self.TIME_NORM:.3f}")
-                except Exception as _e:
-                    print("WARNING: Could not add RT to plot")
-                self.current_plot_left.set_xlabel("Dose")
-                self.current_plot_left.set_ylabel("Ion Area")
-
-                self._used_annotations = []  # Avoid labelling the same masses multiple times?
-                for current_sample, peak in zip(self.sample_set, peak_set):
-                    if peak is not None:
-                        # self.current_plot_right.plot(peak.mass_spectrum.mass_list, peak.mass_spectrum.intensity_list)
-                        x_set, y_set = numpy.array(list(peak.ion_areas.keys())), numpy.array(list(peak.ion_areas.values()))
-                        self.current_plot_right.scatter(x_set, y_set, label=f"{current_sample.sample_number}-{current_sample.dose}")
-                        annotate_index = numpy.argsort(y_set)[-3:][::-1]
-                        self._annotate_x(x_set[annotate_index], y_set[annotate_index])
-                self.current_plot_right.legend()
-                self.current_plot_right.set_title(f"Feature coef={self.feature_regression_response[feature_index+i]:.5f}. Corresponding mass spectrum:")
-                self.current_plot_right.set_xlabel("Mass")
-                self.current_plot_right.set_ylabel("Area")  # Intensity
-
-    def _annotate_x(self, x_array, y_array):
-        for x, y in zip(x_array, y_array):
-            if x not in self._used_annotations:
-                self._used_annotations.append(x)  # TODO: Swap to the most intense peak
-                self.current_plot_right.annotate(x, (x, y), xycoords='data')
-
-    def on_next(self, _event):
-        self.update_feature_set(self.first_feature_display+self.pair_length)
-        self.update_plot()
-
-    def on_previous(self, _event):
-        self.update_feature_set(self.first_feature_display-self.pair_length)
-        self.update_plot()
+# class FeaturePlot(GeneralPlotFrame):
+#     ''' Compare meta-data for multiple samples '''
+#     def __init__(self):
+#         super().__init__("Feature Detail Plot")
+#         self.pair_length = 3
+#         del self.current_plot  # Change inheritance
+#         self.fig.clear()
+#         self.plots = []
+#         for index in range(self.pair_length*2):
+#             axes = self.fig.add_subplot(self.pair_length, 2, index+1)
+#             self.plots.append(axes)
+#         self.select_subplot(0)
+#         self.first_feature_display = 0
+#
+#     def select_subplot(self, plot_number):
+#         if plot_number < self.pair_length and plot_number >= 0:
+#             self.selected_plot_index = plot_number
+#             self.current_plot_left = self.plots[plot_number*2]
+#             self.current_plot_right = self.plots[plot_number*2+1]
+#         else:
+#             print(f"No plots available for display at {plot_number}")
+#
+#     def clear_feature(self):
+#         self.current_plot_left.clear()
+#         self.current_plot_right.clear()
+#
+#     def load_all_features(self, sample_set, feature_sources, regression_response_list):
+#         self.first_feature_display = 0
+#         self.sample_set = sample_set
+#         self.dose_set = [current_sample.dose for current_sample in sample_set]
+#         self.feature_sources = feature_sources
+#         self.feature_regression_response = regression_response_list
+#
+#     def update_feature_set(self, feature_index):
+#         self.first_feature_display = feature_index
+#         for i in range(self.pair_length):
+#             if feature_index+i < 0 or feature_index+i >= len(self.feature_sources):
+#                 print(f"No data to display at feature {feature_index+i}")
+#                 continue
+#             self.select_subplot(i)
+#             self.clear_feature()
+#             source_data = self.feature_sources[feature_index+i]
+#             try:
+#                 mass_data_set = isinstance(source_data[0], int)
+#             except Exception as _e:
+#                 mass_data_set = False
+#
+#             if mass_data_set:
+#                 self.current_plot_left.plot(self.dose_set, source_data[1], "x-", label="Total Ion Area")
+#                 self.current_plot_left.set_title(f"Feature {feature_index+i}: Total mass at {source_data[0]}")
+#                 self.current_plot_left.set_xlabel("Dose")
+#                 self.current_plot_left.set_ylabel("Total Fragment Area")
+#                 self.current_plot_right.clear()  # Redundant, replace with some kind of plot?
+#                 self.current_plot_right.set_title(f"Feature coef={self.feature_regression_response[feature_index+i]:.5f}")
+#             else:
+#                 peak_set = source_data
+#                 areas = [sample.Sample.get_area(peak) for peak in peak_set]
+#                 self.current_plot_left.plot(self.dose_set, areas, "x-", label="Ion Area")
+#                 try:
+#                     rt = numpy.average([peak.rt for peak in peak_set if peak is not None])  # TODO: Check deviation
+#                     self.current_plot_left.set_title(f"Feature {feature_index+i}: Peak at time {rt/self.TIME_NORM:.3f}")
+#                 except Exception as _e:
+#                     print("WARNING: Could not add RT to plot")
+#                 self.current_plot_left.set_xlabel("Dose")
+#                 self.current_plot_left.set_ylabel("Ion Area")
+#
+#                 self._used_annotations = []  # Avoid labelling the same masses multiple times?
+#                 for current_sample, peak in zip(self.sample_set, peak_set):
+#                     if peak is not None:
+#                         # self.current_plot_right.plot(peak.mass_spectrum.mass_list, peak.mass_spectrum.intensity_list)
+#                         x_set, y_set = numpy.array(list(peak.ion_areas.keys())), numpy.array(list(peak.ion_areas.values()))
+#                         self.current_plot_right.scatter(x_set, y_set, label=f"{current_sample.sample_number}-{current_sample.dose}")
+#                         annotate_index = numpy.argsort(y_set)[-3:][::-1]
+#                         self._annotate_x(x_set[annotate_index], y_set[annotate_index])
+#                 self.current_plot_right.legend()
+#                 self.current_plot_right.set_title(f"Feature coef={self.feature_regression_response[feature_index+i]:.5f}. Corresponding mass spectrum:")
+#                 self.current_plot_right.set_xlabel("Mass")
+#                 self.current_plot_right.set_ylabel("Area")  # Intensity
+#
+#     def _annotate_x(self, x_array, y_array):
+#         for x, y in zip(x_array, y_array):
+#             if x not in self._used_annotations:
+#                 self._used_annotations.append(x)  # TODO: Swap to the most intense peak
+#                 self.current_plot_right.annotate(x, (x, y), xycoords='data')
+#
+#     def on_next(self, _event):
+#         self.update_feature_set(self.first_feature_display+self.pair_length)
+#         self.update_plot()
+#
+#     def on_previous(self, _event):
+#         self.update_feature_set(self.first_feature_display-self.pair_length)
+#         self.update_plot()
 
 
 class LoadedDataPlot(GeneralPlotFrame):
     '''
-    Plots raw GCMS data for verification and testing
+    Plots raw GCMS TIC data for verification and testing
     '''
     def __init__(self, mass_spec_frame, sample_set=None):
         super().__init__(title='GCMS TIC plot')
@@ -649,12 +660,16 @@ class LoadedDataPlot(GeneralPlotFrame):
         x_data = numpy.array(input_ic.time_list)/self.TIME_NORM
         y_data = [self.sample_set.baseline_at(x) for x in numpy.array(input_ic.time_list)]
         raw_y_data = self.sample_set.full_baseline
+
+        self.current_plot.plot(x_data, y_data, "r")
+        if not raw_y_data.any():
+            # no baseline
+            return
         if len(x_data) > len(raw_y_data):
             raw_x_data = numpy.resize(x_data, len(raw_y_data))
         else:
             raw_y_data = numpy.resize(raw_y_data, len(x_data))
             raw_x_data = x_data
-        self.current_plot.plot(x_data, y_data, "r")
         self.current_plot.plot(raw_x_data, raw_y_data, "g")
         # self.update_plot()  # Required if not using show_peak_total_intensity
 
@@ -830,7 +845,11 @@ class SingleChromatogramPlot(GeneralPlotFrame):
         selected_peak = self._mass_plot.show_peak_mass_spectrum(peak_index)
         # TODO: Display integration area for peak, mass
         try:
-            left_b, center_b, right_b = selected_peak.bounds
+            for ic_peak in selected_peak._ion_peaks:
+                if ic_peak.mass == self._last_mass:
+                    left_b = ic_peak.left
+                    right_b = ic_peak.right
+            center_b = selected_peak.bounds[1]
             left_t = self._last_sample.im.get_time_at_index(center_b-left_b)/self.TIME_NORM
             center_t = self._last_sample.im.get_time_at_index(center_b)/self.TIME_NORM
             right_t = self._last_sample.im.get_time_at_index(center_b+right_b)/self.TIME_NORM

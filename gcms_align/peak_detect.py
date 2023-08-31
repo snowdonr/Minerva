@@ -20,13 +20,17 @@ from . import mass_spectrum
 
 
 class Parse_IM():
+    ''' Wrap and process the Intensity matrix from pymassspec '''
+
     def __init__(self, input_sample: 'sample.Sample'):
         self.sample = input_sample
         self.config = input_sample.config
 
     def load_from_im(self, intensity_matrix: pyms.IntensityMatrix.IntensityMatrix):
+        '''
+        Apply pyms functions to extract peaks, see pymassspec documentation
+        '''
         n_scan, n_mz = intensity_matrix.size
-        # start_time = time.process_time()
         print(f"File has {n_scan} scans and {n_mz} masses")
 
         # perform necessary pre filtering
@@ -50,29 +54,16 @@ class Parse_IM():
         # Filter the peak list,
         # first by removing all intensities in a peak less than a given relative threshold,
         # then by removing all peaks that have less than a given number of ions above a given value
-
         r = self.config.peak_trim_percent_of_max  # % -> percentage ratio of ion intensity to max ion intensity
         peak_list_r = pyms.BillerBiemann.rel_threshold(peak_list, r)  # trim by relative intensity
         print(f"Peaks above {r}% of max: {len(peak_list_r)}")
 
-        n = self.config.min_ions  # minimum number of ions, n
-        # noise_level = 5000  # >= intensity threshold
         noise_level = pyms.Noise.Analysis.window_analyzer(self.sample.get_tic())
-        pyms_peak_list = pyms.BillerBiemann.num_ions_threshold(peak_list_r, n, cutoff=noise_level)  # trim by threshold
-        print(f"Remaining with {n} ions at >{noise_level:.3g} intensity: {len(pyms_peak_list)}")
+        pyms_peak_list = pyms.BillerBiemann.num_ions_threshold(peak_list_r, self.config.min_ions, cutoff=noise_level)  # trim by threshold
+        print(f"Remaining with {self.config.min_ions} ions at >{noise_level:.3g} intensity: {len(pyms_peak_list)}")
 
         self.sample.fragment_count = len(pyms_peak_list)
         # Set the peak areas
-#         print("STATUS: Beginning to calculate peak areas")
-#         try:
-#             status_update_count = len(pyms_peak_list) / 10
-#             for count, peak in enumerate(pyms_peak_list):
-#                 if count % status_update_count<1:
-#                     print(f"Finished {count}/{len(pyms_peak_list)} peaks")
-#                 peak.set_ions()
-#         except Exception as _e:
-#             logging.exception("Could not set peak areas")
-
         print(f"STATUS: Calculating ion areas")
         try:
             status_update_count = len(pyms_peak_list) / 10
@@ -83,18 +74,6 @@ class Parse_IM():
         except Exception as _e:
             logging.exception("Could not set peak ion areas")
         print("STATUS: Done calculating peak areas")
-
-#         if self.config.do_peak_bounds_calc:
-#             print("STATUS: Begin calculating peak bounds")
-#             status_update_count = len(pyms_peak_list) / 10
-#             for count, peak in enumerate(pyms_peak_list):
-#                 if count % status_update_count<1:
-#                     print(f"Finished {count}/{len(pyms_peak_list)} peaks")
-#                 _left, apex, _right = peak.bounds  # left and right should be 0 at this point
-#                 width_left, width_right = pyms.Peak.PeakFunction.peak_pt_bounds(intensity_matrix, peak)
-#                 peak.set_bounds(width_left, apex, width_right)
-#             print("STATUS: Done calculating peak bounds")
-        # pyms.Peak.List.fill_peaks(intensity_matrix, pyms_peak_list, D=self.config.peak_width_st_dev)
 
         return pyms_peak_list
 
@@ -125,9 +104,6 @@ class Peak(sql_base.Base):
         self.rt = pyms_peak.rt
         self.source_sample = pyms_peak.source_sample
         self.mass_spectrum = mass_spectrum.MassSpectrum_SQL()
-        
-        # self.bounds
-        # self.ion_areas
 
     def set_ions(self, ion_dict: dict, max_ion_entries=3):
         ion_tuple_list = sorted(list(ion_dict.items()), key=operator.itemgetter(1))[::-1]
@@ -136,4 +112,3 @@ class Peak(sql_base.Base):
             self.mass_spectrum.values.append(new_spectrum_entry)
             if i >= max_ion_entries-1:
                 break
-

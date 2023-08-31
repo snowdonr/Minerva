@@ -89,17 +89,17 @@ class Project(sql_base.Base):
         sample_taken_names = set()
         for current_sample in self.sample_set:
             if current_sample.sample_number in sample_taken_names:
-                next_name = str(current_sample.sample_number) + "_1"
                 i = 1
+                next_name = str(current_sample.sample_number) + "_" +str(i)
                 while next_name in sample_taken_names:
                     i += 1
-                    next_name = next_name[:-1]+str(i)
+                    next_name = str(current_sample.sample_number) + "_" +str(i)
                 current_sample.sample_number = next_name
             sample_taken_names.add(current_sample.sample_number)
 
     def identify_compounds(self):
         test_sample_data = self.sample_set[0]
-        peaks = test_sample_data.get_filtered_peaks(lambda x: x.area>30000)  # TODO    
+        peaks = test_sample_data.get_filtered_peaks(lambda x: x.area>self.config.identify_minimum_area)
 
         identification_results = []
         for current_peak in peaks:
@@ -149,6 +149,8 @@ class Project(sql_base.Base):
         self._analysis_set.add_library_matches(self.user_library, self.sql)
         self._analysis_set.add_library_matches(self.nist_library, self.sql)
 
+        self.sample_normalization()
+
         if self.config.merge_aligned_peaks:
             output_data = self._analysis_set.merged_data
         else:
@@ -156,7 +158,7 @@ class Project(sql_base.Base):
         try:
             self._analysis_set.write_aligned_csv(output_data, pathlib.Path(self.config.analysis_directory) / (self.config.experiment_name+"_results.csv"), output_compounds=True)
         except PermissionError:
-            print("Analysis Relationship could not write to 'results' Excel file")
+            logging.warning("Analysis Relationship could not write to 'results' Excel file")
 
         try:
             self.sql.update_project_table(self, self._analysis_set)
@@ -202,9 +204,20 @@ class Project(sql_base.Base):
                 area_list = [x.area for x in aligned_set.gc_peaks]
                 rt_list = [x.rt for x in aligned_set.gc_peaks]
                 try:
-                    writer.writerow([str(compound_list.encode(encoding='UTF-8',errors='ignore')), len(aligned_set.gc_peaks), aligned_set.total_area, numpy.std(area_list), max(rt_list)-min(rt_list)])
+                    writer.writerow([str(compound_list.encode(encoding='UTF-8', errors='ignore')),
+                                     len(aligned_set.gc_peaks),
+                                     aligned_set.total_area,
+                                     numpy.std(area_list),          # area deviation
+                                     max(rt_list)-min(rt_list)])    # rt range
                 except UnicodeEncodeError as _e:
-                    logging.exception("Could not encode line")
+                    logging.exception(f"Could not encode line for summary compounds {aligned_set}")
+
+    def sample_normalization(self) -> list:
+        total_values = []
+        for sample in self.samples:
+            sample.total_area = sum([x.area for x in sample.peak_list])
+            total_values.append(sample.total_area)
+        return total_values
 
     def get_aligned_set(self) -> list:
         # result = self._analysis_set._alignment_data.peaks_aligned  # TODO: use alignment_data_groups

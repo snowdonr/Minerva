@@ -16,17 +16,20 @@ DEBUG_STATS = False
 
 
 class MassSpectrumEntry(sql_base.Base):
+    ''' A single mass/intensity pair linked to a specific spectrum '''
     __tablename__ = "Ion_Peak"
 
     id = sqlalchemy.Column(sqlalchemy.Integer, primary_key=True)
     mass = sqlalchemy.Column(sqlalchemy.Integer, nullable=True)  # TODO: Shouldn't be null
     intensity = sqlalchemy.Column(sqlalchemy.Float, nullable=True)
     area = sqlalchemy.Column(sqlalchemy.Float, nullable=True)
+    fraction = sqlalchemy.Column(sqlalchemy.Float, nullable=True)
     spectrum_id = sqlalchemy.Column(sqlalchemy.Integer, sqlalchemy.ForeignKey('Mass_Spectrum.id'))
     spectrum = sqlalchemy.orm.relationship("MassSpectrum_SQL", back_populates="values")
 
 
 class MassSpectrum_SQL(sql_base.Base):
+    ''' Mass spectrum from a single peak '''
     __tablename__ = "Mass_Spectrum"
 
     id = sqlalchemy.Column(sqlalchemy.Integer, primary_key=True)
@@ -37,22 +40,20 @@ class MassSpectrum_SQL(sql_base.Base):
 
 
 class MassSpectrum(pyms.Spectrum.MassSpectrum):
-    ''' '''
+    ''' Container for mass spectrum functions beyond (and including) the SQL portion compatible with pyms '''
     def __init__(self, mass_spec):
         '''
-        Convert a pyms.MassSpectrum to a database
+        Convert a pyms.MassSpectrum to contain a database entry
         '''
         self.sql_ref = MassSpectrum_SQL()
         if mass_spec is None:
             super().__init__([], [])
         else:
             super().__init__(mass_spec.mass_list, mass_spec.intensity_list)
-            # self._update_sql()
 
     def _update_sql(self):
-        # self.sql_ref.values = []
         for mass_entry, intensity_entry in zip(self._mass_list, self._intensity_list):
-            if intensity_entry > 0:
+            if intensity_entry != 0:
                 new_entry = MassSpectrumEntry(mass=mass_entry, intensity=intensity_entry)
                 self.sql_ref.values.append(new_entry)
 
@@ -110,6 +111,7 @@ class MassSpectrum(pyms.Spectrum.MassSpectrum):
 
     @staticmethod
     def convert_from_dict(input_dict) -> 'MassSpectrum':
+        ''' Create MassSpectrum from a dict of mass:intensity pairs '''
         result = MassSpectrum(None)
         masses = list(input_dict.keys())
         masses.sort()
@@ -119,13 +121,14 @@ class MassSpectrum(pyms.Spectrum.MassSpectrum):
 
     @staticmethod
     def convert_from_lists(mass_list, intensity_list) -> 'MassSpectrum':
+        ''' Create MassSpectrum from two lists '''
         result = MassSpectrum(None)
         result.mass_list = mass_list
         result.intensity_list = intensity_list
         return result
 
     @staticmethod
-    def _dict_align(full_keys, input_dict):
+    def _dict_align(full_keys: list, input_dict: dict) -> list:
         result = []
         for single_key in full_keys:
             result.append(input_dict.get(single_key, 0.0))
@@ -133,12 +136,12 @@ class MassSpectrum(pyms.Spectrum.MassSpectrum):
 
     @staticmethod
     def single_compare(intensity_left: list, intensity_right: list) -> float:  # numpy.typing.NDArray
+        ''' Compare two intensity lists (assumed to be mass aligned) and score their similarity '''
         if DEBUG_STATS:
-            print("Mass Spec relation")
+            print("Various possible mass spec relations:")
             print(scipy.stats.pearsonr(intensity_left, intensity_right))    # Pearson's r
             print(scipy.stats.spearmanr(intensity_left, intensity_right))   # Spearman's rho
             print(scipy.stats.kendalltau(intensity_left, intensity_right))  # Kendall's tau
             print(scipy.stats.linregress(intensity_left, intensity_right))  # linear regression - see r2
-        # normalize
 
         return scipy.stats.pearsonr(intensity_left, intensity_right)[0]

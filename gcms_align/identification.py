@@ -9,11 +9,12 @@ import logging
 import pathlib
 import time
 import json
+import urllib.request
+import urllib.parse
+
 import openpyxl
 import numpy
 import sqlalchemy.orm
-import urllib.request
-import urllib.parse
 
 import pyms.Spectrum
 from . import sql_base
@@ -68,16 +69,16 @@ class UserExcel(ID_Library):
         self.max_rt_difference_s = 30  # TODO: Parameter
         self._source_path = source_spreadsheet
         self._column_names = {  # Note: Column name keys should be all lower case to match casefold
-            'category': (4, 'category'), 'compound': (5, 'name'), 'nickname': (6, 'nickname'), 'quality': (7, 'quality'),
-            'formula': (8, 'formula'), 'mw': (9, 'mw'), 'rt': (10, 'rt'),
-            'cas#': (11, 'cas'), 'cid': (17, "cid"), "inchi": (18, "inchi"), "inchikey": (19, "inchikey"),
-            'iupac name': (12, 'iupacname'),
-            'monoisotopic mass': (13, 'monoisotopicmass'), 'xlogp': (14, 'xlogp'),
-            'canonical smiles': (15, 'canonicalsmiles'),
-            'odor': (38, "odor"), 'synonyms': (39, "synonyms"),
-            'm/z 1': (22, 'mass1'), 'frac 1': (23, 'portion1'),
-            'm/z 2': (24, 'mass2'), 'frac 2': (25, 'portion2'),
-            'm/z 3': (25, 'mass3'), 'frac 3': (27, 'portion3')
+            'category': (3, 'category'), 'compound': (4, 'name'), 'cid': (5, "cid"),
+            'rt': (6, 'rt'), 'nickname': (7, 'nickname'),
+            'm/z 1': (8, 'mass1'), 'frac 1': (9, 'portion1'),
+            'm/z 2': (10, 'mass2'), 'frac 2': (11, 'portion2'),
+            'm/z 3': (12, 'mass3'), 'frac 3': (13, 'portion3'),
+            'formula': (14, 'formula'), 'iupac name': (15, 'iupacname'),
+            'monoisotopic mass': (16, 'monoisotopicmass'), 'xlogp': (17, 'xlogp'),
+            'canonical smiles': (18, 'canonicalsmiles'), "inchi": (19, "inchi"), "inchikey": (20, "inchikey"),
+            'mw': (21, 'mw'), 'cas#': (22, 'cas'), 'quality': (23, 'quality'),
+            'odor': (24, "odor"), 'synonyms': (25, "synonyms"),
         }
         if source_spreadsheet:
             try:
@@ -85,7 +86,7 @@ class UserExcel(ID_Library):
                 self.source_ws = self.source_wb.active
                 self.active = True
             except FileNotFoundError:
-                print(f"Could not load user identification excel {source_spreadsheet}")
+                logging.error(f"Could not load user identification excel {source_spreadsheet}")
                 self.active = False
             except PermissionError:
                 logging.warning(f"User identification excel {source_spreadsheet} is open or locked")
@@ -398,7 +399,7 @@ class UserEntry(sql_base.Base):
                 if getattr(self, attribute_name) is None:
                     continue
                 if attribute_name == "rt":
-                    new_value = getattr(self, attribute_name)/60.0  # Userlibrary uses minutes
+                    new_value = getattr(self, attribute_name)*60.0  # Userlibrary uses minutes
                 else:
                     new_value = getattr(self, attribute_name)
                 row[column_index].value = new_value

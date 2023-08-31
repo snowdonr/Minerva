@@ -4,8 +4,8 @@ Created on Nov. 4, 2022
 @author: Ryan
 '''
 import unittest
-from gcms import identification
-from gcms import mass_spectrum
+from gcms_align import identification
+from gcms_align import mass_spectrum
 
 
 class IdentificationTest(unittest.TestCase):
@@ -22,7 +22,6 @@ class IdentificationTest(unittest.TestCase):
         self.assertTrue(len(test_obj.spectrum.values) == 0)
         test_obj.mass1(50)
         self.assertTrue(len(test_obj.spectrum.values) == 1)
-        
 
     def test_pub_chem(self):
         id_type_dict = {"name": ("ethanol", 702, "ethanol"),

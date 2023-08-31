@@ -12,11 +12,13 @@ import datetime
 import functools
 import collections
 import copy
+import gzip
+import csv
+
 import pyms.DPA.Alignment
 import pyms.DPA.PairwiseAlignment
 import pyms.Peak.List.IO
 import pyms.Experiment
-import gzip
 # import pandas  # Align object creates pandas DataFrame results
 
 from . import sample
@@ -30,7 +32,7 @@ class Align(object):
     Used to align a set of samples
     '''
 
-    def __init__(self, analysis_name: str, sample_number_list: list, sample_set: sample.SampleSet, cache_directory: pathlib.Path, output_directory: pathlib.Path, config: settings.Setting):
+    def __init__(self, analysis_name: str, sample_set: sample.SampleSet, cache_directory: pathlib.Path, output_directory: pathlib.Path, config: settings.Setting):
         load_from_files = False  # unimplemented
         save_to_file = False
         expr_list = []
@@ -46,6 +48,13 @@ class Align(object):
         else:
             largest_min_mass = sample_set[0].min_mass
             smallest_max_mass = sample_set[0].max_mass
+
+            removal_list = []
+            for current_sample in sample_set:
+                if len(current_sample.peak_list) < 1:
+                    removal_list.append(current_sample)
+            for sample in removal_list:
+                pass
 
             for current_sample in sample_set:
                 if current_sample.min_mass > largest_min_mass:
@@ -63,7 +72,7 @@ class Align(object):
                     self.mass_range[1] = self.config.maximum_mass_limit
 
             skip_sample = []
-            print(f"Cropping all samples to a mass range of {self.mass_range[0]}-{self.mass_range[1]}")
+            logging.info(f"Cropping all samples to a mass range of {self.mass_range[0]}-{self.mass_range[1]}")
             for current_sample in sample_set:
                 if current_sample.im:
                     current_sample.im.crop_mass(self.mass_range[0], self.mass_range[1])
@@ -81,28 +90,18 @@ class Align(object):
                     logging.warning(f"Skipping sample {current_sample}, no peaks remaining after mass crop")
             sample_set[:] = [x for x in sample_set if x not in skip_sample]
 
-            print(f"Done cropping mass, setting up experiments and selecting RT range")
+            logging.info(f"Done cropping mass, setting up experiments and selecting RT range")
             used_names = []
             for count, current_sample in enumerate(sample_set):
-                if sample_number_list and current_sample.sample_number not in sample_number_list:
-                    continue  # Skipping unlisted samples, as SampleSet doesn't do subsets yet
                 # Create an Experiment
 
-                def peak_filter(peak_input: pyms.Peak.Peak) -> bool:
-                    if peak_input.area is None:
-                        return False
-                    elif peak_input.rt < self.config.manual_baseline_section_rt*60:
-                        return peak_input.area > self.config.filter_minimum_area
-                    else:
-                        return peak_input.area > 20000  # TODO: Update
-
-                experiment_peaks = current_sample.get_filtered_peaks(peak_filter)
+                experiment_peaks = current_sample.get_filtered_peaks(self.peak_filter)
                 if not experiment_peaks or len(experiment_peaks) < 1:
-                    print(f"No accepted peaks in sample {current_sample}")
+                    logging.error(f"No accepted peaks in sample {current_sample}")
                     continue
                 else:
                     self.remaining_samples.append(current_sample)
-                    print(f"Sample {current_sample} has {len(experiment_peaks)} used for alignment")
+                    logging.info(f"Sample {current_sample} has {len(experiment_peaks)} used for alignment")
                 experiment_name_base = analysis_name+"_"+str(current_sample.sample_number)
                 experiment_name_candidate = experiment_name_base
                 counter = 1
@@ -118,7 +117,7 @@ class Align(object):
                 expr_list.append(expr)
 
         if len(expr_list) < 1:
-            print(f"No samples for analysis from: {sample_number_list}")
+            logging.error(f"No samples for analysis from: {sample_set}")
             return
 
         print(f"Beginning alignment of {len(expr_list)} experiments")
@@ -128,11 +127,14 @@ class Align(object):
             with open(temp_path, "rb") as pf:
                 pair_aligned = pickle.load(pf)
         else:
-            # Convert each Experiment object is converted into an Alignment object with the function exprl2alignment()..
+            # Convert each Experiment object into an Alignment object with the function exprl2alignment()..
             align_sample_experiments = pyms.DPA.Alignment.exprl2alignment(expr_list)
+            full_length = len(align_sample_experiments)
+            align_sample_experiments = [x for x in align_sample_experiments if len(x.peakalgt) > 0]
+            logging.info(f"Experiment list now {full_length} from {len(align_sample_experiments)}")
             pairwise_temp = pathlib.Path(self.config.temp_path) / pathlib.Path((str(analysis_name)+self.config.pairwise_temp_file))
             align_tree = pyms.DPA.PairwiseAlignment.PairwiseAlignment(align_sample_experiments, float(self.config.rt_sensitivity_s), float(self.config.gap_penalty), pairwise_temp, self.config)
-            pair_aligned = pyms.DPA.PairwiseAlignment.align_with_tree(align_tree, min_peaks=self.config.alignment_minimum_peaks)
+            pair_aligned = pyms.DPA.PairwiseAlignment.align_with_tree(align_tree, min_peaks=self.config.alignment_minimum_peaks, config=self.config)
             try:
                 with open(temp_path, 'wb') as file_out:
                     pickle.dump(pair_aligned, file_out)
@@ -143,7 +145,7 @@ class Align(object):
             pair_aligned.write_csv(output_directory / (str(analysis_name)+'_rt.csv'),  # for inspection
                                    output_directory / (str(analysis_name)+'_area.csv'))  # data matrix, samples-rows
         except Exception as _e:
-            logging.exception("Could not save _rt or _area")
+            logging.exception("Could not save _rt or _area csv files")
 
         print(f"Done alignment of {len(expr_list)} experiments, storing details")
         common_ion_list = pair_aligned.common_ion()
@@ -167,17 +169,54 @@ class Align(object):
                 cache_file_name = cache_directory / (str(analysis_name)+'_align.pickle')
                 with open(cache_file_name, 'wb') as file_out:
                     # self.peaks_aligned can also have sample references
+                    sample_temp = self.remaining_samples
+                    self.remaining_samples = None
                     pickle.dump(self, file_out)
+                    self.remaining_samples = sample_temp
         except Exception as _e:
             logging.exception("Failed to save checkpoint during alignment")
+
+        try:
+            if self.config.comparison_export:
+                self.comparison_export(sample_set, self.config.analysis_directory)
+        except Exception as _e:
+            logging.exception("Failed to create sample comparison")
 
         print(f"Done alignment storage of {len(expr_list)} experiments")
         print(f"{datetime.datetime.now()}")
         self.pickle_load_finish(sample_set)
 
+    def peak_filter(self, peak_input: pyms.Peak.Peak) -> bool:
+        if peak_input.area is None:
+            return False
+        elif peak_input.rt < self.config.manual_baseline_section_rt*60:
+            return peak_input.area > self.config.filter_minimum_area
+        else:
+            return peak_input.area > 20000  # TODO: Update
+
+    def _sample_set_filter(self, sample_set: sample.SampleSet) -> list:
+        # TODO: Remove duplication
+
+        filtered_samples = []
+        for current_sample in sample_set:
+
+            experiment_peaks = current_sample.get_filtered_peaks(self.peak_filter)
+            if not experiment_peaks or len(experiment_peaks) < 1:
+                logging.error(f"No accepted peaks in sample {current_sample}")
+                continue
+            else:
+                filtered_samples.append(current_sample)
+                logging.info(f"Sample {current_sample} has {len(experiment_peaks)} used for alignment")
+        return filtered_samples
+
     def pickle_load_finish(self, sample_set: sample.SampleSet):
         self.sample_set = sample_set
         self._add_sample_ref(sample_set)
+        if self.remaining_samples is None:
+            self.remaining_samples = self._sample_set_filter(sample_set)
+
+        if self.config.comparison_export:
+            self.comparison_export(sample_set, self.config.analysis_directory)
 
     def _add_sample_ref(self, sample_set: sample.SampleSet):
         for aligned_row in self.peaks_aligned.values:
@@ -187,6 +226,72 @@ class Align(object):
                         entry.source_sample = sample_set[index]
                     except IndexError:
                         logging.warning("Source sample out of range")
+
+    def comparison_export(self, sample_set: sample.SampleSet, output_directory: pathlib.Path):
+        ''' Set-wise compare samples and create csv summary files '''
+        sample_dict = {}
+        aligned_size = None
+        for sample, aligned_row in zip(sample_set, self.peaks_aligned.T.values):
+            sample_dict[sample.sample_number] = aligned_row
+            if aligned_size is None:
+                aligned_size = len(aligned_row)
+            elif aligned_size != len(aligned_row):
+                logging.warning("Unequal comparison length")
+        # sample_sets = itertools.combinations(sample_set, 2)
+        sample_sets = [[sample] for sample in sample_set]
+        pair_results = {}
+        for pair in sample_sets:
+            in_compounds = [None]*aligned_size
+            out_compounds = [None]*aligned_size
+            for test_sample in sample_set:
+                if test_sample in pair:
+                    in_compounds = self.union_peak_lists(sample_dict[test_sample.sample_number], in_compounds)
+                else:
+                    out_compounds = self.union_peak_lists(sample_dict[test_sample.sample_number], out_compounds)
+            pair_name = "_".join([x.sample_number for x in pair])
+            pair_results[pair_name] = self.difference_peak_lists(in_compounds, out_compounds)  # set .difference
+
+        manual_set = self.difference_peak_lists(sample_dict["C1"], self.union_peak_lists(sample_dict["C2"], sample_dict["B1"]))
+        self.write_csv(output_directory / ("C1-C2_B1"+".csv"), manual_set)
+
+        manual_set = self.difference_peak_lists(sample_dict["C1"], sample_dict["C2"])
+        self.write_csv(output_directory / ("C1-C2"+".csv"), manual_set)
+
+        manual_set = self.difference_peak_lists(sample_dict["B1"], sample_dict["B2"])
+        self.write_csv(output_directory / ("B1-B2"+".csv"), manual_set)
+
+        for pair_name, pair_item in pair_results.items():
+            self.write_csv(output_directory / (pair_name+".csv"), pair_item)
+
+    def write_csv(self, file_name, data_set):
+        ''' Create a csv from a list of Peaks '''
+        if sum(1 for i in data_set if i is not None) == 0:
+            print(f"Skipping {file_name}")
+            return
+        try:
+            with open(file_name, 'w') as file_out:
+                writer = csv.writer(file_out, dialect="excel")
+                writer.writerow(["Peak UID", "Sample", "Area", "RT(min)", "Mass", "Ion Area", "Mass", "Ion Area"])
+                for peak_item in data_set:
+                    if self.config.comparison_skip_empty and peak_item is None:
+                        writer.writerow("")
+                    else:
+                        mass_spec_list = []
+                        for mass_value, ion_area in peak_item.ion_areas.items():
+                            mass_spec_list.extend((mass_value, ion_area))
+                        writer.writerow([peak_item.UID, peak_item.source_sample.sample_number, peak_item.area, peak_item.rt/60]+mass_spec_list)
+        except Exception as _e:
+            logging.exception("aligned pickle")
+
+    def union_peak_lists(self, left_list, right_list):
+        ''' Set union equivalent for positional lists of Peak/None '''
+        result_list = [a or b for (a, b) in zip(left_list, right_list)]
+        return result_list
+
+    def difference_peak_lists(self, first_list, second_list):
+        ''' Set difference equivalent for positional lists of Peak/None '''
+        result_list = [a if a and not b else None for a, b in zip(first_list, second_list)]
+        return result_list
 
 
 def cache_ignore_args(input_function):

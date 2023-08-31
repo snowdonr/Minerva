@@ -9,14 +9,12 @@ matplotlib.use('WXAgg')
 import wx
 import pathlib
 import argparse
-# this project requires pymassspec
-# other tools to look into: pymzML
 
 from gcms_align import main_ui
 
 
 INTERACTIVE_MULTIPROCESS = True
-VERSION = "0.9"
+VERSION = "1.0"
 
 
 if __name__ == '__main__':

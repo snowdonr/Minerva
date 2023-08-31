@@ -49,7 +49,7 @@ class Analysis_Set(object):
         else:
             logging.info(f"Beginning alignment of peaks for {analysis_name}")
             output_directory = pathlib.Path(self.config.analysis_directory)
-            self._alignment_data = align.Align(analysis_name, [], test_sample_set, cache_directory, output_directory, self.config)
+            self._alignment_data = align.Align(analysis_name, test_sample_set, cache_directory, output_directory, self.config)
 
     def merge_aligned_peaks(self):
         '''
@@ -89,7 +89,7 @@ class Analysis_Set(object):
                     related.append(other_group)
             target_aligned_peaks.relations = related
 
-        print(f"Merging alignment data {len(grouped_data)}")
+        logging.info(f"Merging alignment data {len(grouped_data)}")
         self.merged_data = []
         try:
             for grouped_item in grouped_data:
@@ -135,10 +135,11 @@ class Analysis_Set(object):
         return scipy.stats.pearsonr(adjust_left, adjust_right)[0]  # normalization is not required
 
     def add_library_matches(self, source_library: identification.ID_Library, sql_session: sql_interface.SQL_Interface, use_ion_areas: bool =True):
+        ''' Update self.alignment_data_groups with match information from source_library '''
         existing_db_entries = []
         max_rt_difference = self.config.rt_sensitivity_s * self.config.library_rt_scale
         try:
-            existing_db_entries = sql_session.search_compounds()
+            existing_db_entries = sql_session.create_search_compounds()
         except Exception as _e:
             logging.warning(f"Could not open existing compound entries from {sql_session}")
         existing_compounds = {}
